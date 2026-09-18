@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ ai_namespace }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-models
+spec:
+  capacity:
+    storage: {{ ollama_pv_capacity }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  local:
+    path: {{ ollama_pv_path }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["{{ ai_node_name }}"]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: {{ ai_namespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ""
+  volumeName: ollama-models
+  resources:
+    requests:
+      storage: {{ ollama_pv_capacity }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: openwebui-data
+spec:
+  capacity:
+    storage: {{ openwebui_pv_capacity }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  local:
+    path: {{ openwebui_pv_path }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["{{ ai_node_name }}"]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openwebui-data
+  namespace: {{ ai_namespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ""
+  volumeName: openwebui-data
+  resources:
+    requests:
+      storage: {{ openwebui_pv_capacity }}

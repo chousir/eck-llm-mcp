@@ -1,0 +1,83 @@
+---
+# 建立 mcp_readonly 角色 + mcp_user 帳號（規劃書 §6.2）。
+# 這段獨立掛 es_security tag（見 tasks/main.yml），ES VIP 尚未確認時可
+# --skip-tags es_security 先部署其餘元件，之後單獨 --tags es_security 補跑。
+
+- name: 讀取既有 elastic 超級使用者密碼（{{ es_admin_secret_name }} / {{ es_admin_secret_namespace }}）
+  command: >
+    kubectl -n {{ es_admin_secret_namespace }} get secret {{ es_admin_secret_name }}
+    -o jsonpath={.data.{{ es_admin_secret_key }}}
+  environment:
+    KUBECONFIG: "{{ kubectl_kubeconfig }}"
+  register: es_admin_secret_lookup
+  changed_when: false
+  no_log: true
+
+- name: 找不到 elastic 密碼就中止並給清楚訊息
+  fail:
+    msg: >
+      讀不到 Secret {{ es_admin_secret_namespace }}/{{ es_admin_secret_name }} 的 key
+      "{{ es_admin_secret_key }}"。請確認 defaults/main.yml 的
+      es_admin_secret_name / es_admin_secret_namespace / es_admin_secret_key
+      是否為實際的 ECK elastic 使用者 Secret。
+  when: es_admin_secret_lookup.stdout | default('') | length == 0
+
+- name: 解碼 elastic 密碼
+  set_fact:
+    es_admin_password: "{{ es_admin_secret_lookup.stdout | b64decode }}"
+  no_log: true
+
+- name: Preflight - 確認可從此主機連到 ES（{{ es_public_url }}）
+  uri:
+    url: "{{ es_public_url }}/_cluster/health"
+    method: GET
+    user: elastic
+    password: "{{ es_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: es_health
+  no_log: true
+  failed_when: false
+
+- name: ES 連不到就中止（不要讓 Ollama/es-mcp/Open WebUI 連坐失敗，僅這段標記失敗）
+  fail:
+    msg: >
+      連不到 {{ es_public_url }}/_cluster/health（可能是 es_public_url 尚未改成實際的
+      ES VIP，或該 VIP 從 {{ ai_node_name }} 不可達）。可先用
+      --skip-tags es_security 部署其餘元件，之後補齊 es_public_url 再單獨
+      --tags es_security 執行本段。
+  when: es_health.status is not defined or es_health.status != 200
+
+- name: 建立/更新 mcp_readonly 唯讀角色
+  uri:
+    url: "{{ es_public_url }}/_security/role/{{ mcp_role_name }}"
+    method: PUT
+    user: elastic
+    password: "{{ es_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      cluster: ["monitor"]
+      indices:
+        - names: ["*"]
+          privileges: ["read", "view_index_metadata", "monitor"]
+    status_code: [200, 201]
+  no_log: true
+
+- name: 建立/更新 mcp_user 帳號
+  uri:
+    url: "{{ es_public_url }}/_security/user/{{ mcp_user_name }}"
+    method: PUT
+    user: elastic
+    password: "{{ es_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      password: "{{ mcp_user_password }}"
+      roles: ["{{ mcp_role_name }}"]
+      full_name: "MCP readonly"
+    status_code: [200, 201]
+  no_log: true

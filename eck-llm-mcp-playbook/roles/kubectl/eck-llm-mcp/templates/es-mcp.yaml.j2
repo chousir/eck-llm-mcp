@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-mcp
+  namespace: {{ ai_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: es-mcp
+  template:
+    metadata:
+      labels:
+        app: es-mcp
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      nodeSelector:
+        {{ ai_node_label_key }}: "{{ ai_node_label_value }}"
+      containers:
+        - name: es-mcp
+          image: {{ es_mcp_image }}
+          args: ["http"]
+          env:
+            - name: ES_URL
+              value: "{{ es_mcp_es_url }}"
+            - name: ES_USERNAME
+              value: "{{ es_mcp_es_username }}"
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: es-mcp-cred
+                  key: password
+            - name: ES_SSL_SKIP_VERIFY
+              value: "{{ es_mcp_es_ssl_skip_verify }}"
+            - name: HTTP_ADDRESS
+              value: "0.0.0.0:{{ es_mcp_service_port }}"
+          ports:
+            - containerPort: {{ es_mcp_service_port }}
+          resources:
+            requests:
+              memory: "{{ es_mcp_resources_requests_memory }}"
+              cpu: "{{ es_mcp_resources_requests_cpu }}"
+            limits:
+              memory: "{{ es_mcp_resources_limits_memory }}"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-mcp
+  namespace: {{ ai_namespace }}
+spec:
+  selector:
+    app: es-mcp
+  ports:
+    - port: {{ es_mcp_service_port }}
+      targetPort: {{ es_mcp_service_port }}

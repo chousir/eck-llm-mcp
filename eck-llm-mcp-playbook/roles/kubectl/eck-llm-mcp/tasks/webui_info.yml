@@ -1,0 +1,19 @@
+---
+- name: 取得 Open WebUI LoadBalancer VIP（供後續瀏覽器登入使用）
+  command: >
+    kubectl -n {{ ai_namespace }} get svc open-webui
+    -o jsonpath={.status.loadBalancer.ingress[0].ip}
+  environment:
+    KUBECONFIG: "{{ kubectl_kubeconfig }}"
+  register: open_webui_vip
+  changed_when: false
+  failed_when: false
+
+- name: 顯示 Open WebUI 存取位址
+  debug:
+    msg: >-
+      Open WebUI: http://{{ open_webui_vip.stdout | default('(VIP 尚未配發，稍後用
+      `kubectl -n ' + ai_namespace + ' get svc open-webui` 查詢)') }}
+      — 規劃書 §5.2：ENABLE_SIGNUP={{ webui_enable_signup }}，
+      首次註冊帳號即為 admin；建完使用者後記得把 webui_enable_signup 改為
+      "false" 並重跑本 playbook（或手動 rollout restart）。

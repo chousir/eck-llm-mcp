@@ -1,0 +1,16 @@
+---
+# Secret 值變更不會自動觸發 Deployment 重建 pod（env valueFrom secretKeyRef
+# 不受監看），所以 secrets.yml 在「新建」Secret 時用 notify 觸發對應重啟。
+# Deployment spec 本身變更（image/env 等）由 k8s 原生 rollout 機制處理，不需要 handler。
+
+- name: restart open-webui deployment
+  command: kubectl -n {{ ai_namespace }} rollout restart deploy/open-webui
+  environment:
+    KUBECONFIG: "{{ kubectl_kubeconfig }}"
+  failed_when: false
+
+- name: restart es-mcp deployment
+  command: kubectl -n {{ ai_namespace }} rollout restart deploy/es-mcp
+  environment:
+    KUBECONFIG: "{{ kubectl_kubeconfig }}"
+  failed_when: false

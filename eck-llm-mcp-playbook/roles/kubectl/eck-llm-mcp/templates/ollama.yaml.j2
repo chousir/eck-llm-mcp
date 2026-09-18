@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: {{ ai_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      nodeSelector:
+        {{ ai_node_label_key }}: "{{ ai_node_label_value }}"
+      containers:
+        - name: ollama
+          image: {{ ollama_image }}
+          ports:
+            - containerPort: {{ ollama_service_port }}
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0"
+            - name: OLLAMA_KEEP_ALIVE
+              value: "{{ ollama_keep_alive }}"
+            - name: OLLAMA_NUM_PARALLEL
+              value: "{{ ollama_num_parallel }}"
+          resources:
+            requests:
+              memory: "{{ ollama_resources_requests_memory }}"
+              cpu: "{{ ollama_resources_requests_cpu }}"
+            limits:
+              memory: "{{ ollama_resources_limits_memory }}"
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: {{ ai_namespace }}
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: {{ ollama_service_port }}
+      targetPort: {{ ollama_service_port }}

@@ -1,0 +1,3 @@
+[k8s_controller]
+# TODO: 改成實際的連線資訊
+k8s-controller01 ansible_host=CHANGEME ansible_user=CHANGEME

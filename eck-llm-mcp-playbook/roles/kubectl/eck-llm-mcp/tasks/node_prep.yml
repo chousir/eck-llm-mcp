@@ -1,0 +1,21 @@
+---
+# 節點層級的準備工作——非 k8s 物件，不能用 kubectl apply 表達，維持指令式。
+
+- name: 貼 {{ ai_node_label_key }} 標籤到節點 {{ ai_node_name }}
+  command: >
+    kubectl label node {{ ai_node_name }}
+    {{ ai_node_label_key }}={{ ai_node_label_value }} --overwrite
+  environment:
+    KUBECONFIG: "{{ kubectl_kubeconfig }}"
+  register: label_result
+  changed_when: "'not labeled' not in label_result.stdout"
+
+- name: 建立本地 PV 目錄與 rendered-manifest 目錄
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ollama_pv_path }}"
+    - "{{ openwebui_pv_path }}"
+    - "{{ manifest_dir }}"

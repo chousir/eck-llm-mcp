@@ -1,0 +1,8 @@
+---
+# 全域連線設定；跨 role 共用的變數。
+# 這支 playbook 目前只有一個 role（kubectl/eck-llm-mcp），
+# 該 role 專屬的變數（image、容量、模型 tag、ES 位址...）都在
+# roles/kubectl/eck-llm-mcp/defaults/main.yml，需要覆寫時優先改那邊，
+# 或在此檔加同名變數覆寫（group_vars 優先權高於 role defaults）。
+
+ansible_python_interpreter: auto_silent
