@@ -1,11 +1,15 @@
-# eck-llm-mcp-playbook
+# eck-llm-mcp
 
 在既有 ECK（Elastic on Kubernetes）叢集上，額外部署一層「自然語言深度查詢」能力：
 **Ollama（LLM 推論）+ Elasticsearch MCP Server（把 ES 包成工具）+ Open WebUI（多人前端 / MCP client）**。
-對應規劃書：`ECK深度查詢擴充規劃書_LLM_MCP.md` §3–§6。
+
+- 架構與設計理由：[`ECK深度查詢擴充規劃書_LLM_MCP.md`](./ECK深度查詢擴充規劃書_LLM_MCP.md)（本 README 對應其中 §3–§6）
+- 實際部署工具：本 repo 的 [`eck-llm-mcp-playbook/`](./eck-llm-mcp-playbook) — 一支 Ansible playbook
 
 目標環境是 **air-gapped（離線）**：本 playbook 只負責「把已經備妥的映像/模型組成叢集資源」，
 不處理映像 pull/push、模型下載——這些必須在有網路的環境先做好，帶進來之後才跑本 playbook。
+
+下面所有指令都假設你已經 `cd eck-llm-mcp-playbook`。
 
 ---
 
@@ -70,7 +74,7 @@ k8s-controller01 ansible_host=<實際 IP 或 hostname> ansible_user=<實際 SSH 
 ### 3. 先跑 syntax check / check mode
 
 ```bash
-cd eck-llm-mcp-playbook
+cd eck-llm-mcp-playbook   # 若已在此目錄可略過
 ansible-playbook site.yml --syntax-check
 ansible-playbook site.yml --skip-tags es_security --check --diff
 ```
