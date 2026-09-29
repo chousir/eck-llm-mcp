@@ -62,7 +62,7 @@
 
 **在有網路的環境**備妥下列所有項目,retag 推入內部 registry / 下載到介質,帶入 air-gapped。**模型權重是最大宗、最易漏**。
 
-### 2.1 容器映像(推入內部 registry `registry.internal:5000`)
+### 2.1 容器映像(以原始名稱推入內部 registry，不 retag)
 
 ```
 ollama/ollama:0.32.9                        # LLM 推論;需 ≥0.32 以支援目前模型的 tool-calling 模板
@@ -70,7 +70,7 @@ ghcr.io/open-webui/open-webui:v0.11.0       # 多人前端 + MCP client;需 ≥v
 docker.elastic.co/mcp/elasticsearch:0.4.6   # Elasticsearch MCP,定版不用 latest(見 §1、§6)
 ```
 
-> 版本務必**固定 tag 並記錄**,不要用浮動 `latest`。以 `docker pull` + `skopeo copy` 推入內部 registry。實際 digest 請自行記錄於版控(例如附錄清冊旁)。
+> 版本務必**固定 tag 並記錄**,不要用浮動 `latest`。另需 `nginx:1.30-alpine`(Open WebUI 的 TLS sidecar)。以 `package/pull.sh` 拉取、`package/push-images.sh` 推入內部 registry。實際 digest 請自行記錄於版控(例如附錄清冊旁)。
 
 ### 2.2 模型權重(GGUF 量化,最大宗,務必先下載)
 
@@ -116,7 +116,7 @@ nomic-embed-text   # 嵌入模型(RAG 用,§7)~275MB
 
 ---
 
-> **§3–§6 的 YAML 與指令是設計說明／手動等效步驟。實際部署以 `eck-llm-mcp-playbook/` 的 `ansible-playbook site.yml` 為準**(playbook 為了單次部署、離線與冪等做了調整，例如 Recreate 策略、readiness probe、`OLLAMA_CONTEXT_LENGTH`、`OFFLINE_MODE`、admin 自動建立、es-mcp 自動註冊)，兩者不一致時以 playbook 與 README 為準。
+> **§3–§6 的 YAML 與指令是設計說明／手動等效步驟。實際部署以 `eck-llm-mcp-playbook/` 的 `ansible-playbook site.yml` 為準**(playbook 為了單次部署、離線與冪等做了調整，例如 Recreate 策略、readiness probe、`OLLAMA_CONTEXT_LENGTH`、`OFFLINE_MODE`、admin 自動建立、es-mcp 自動註冊、Open WebUI 的 nginx TLS sidecar)，兩者不一致時以 playbook 與 README 為準。
 
 ## 3. 通用前置(Namespace、controller 排程、本地 PV)
 
@@ -190,7 +190,7 @@ spec:
       nodeSelector: { ai-workload: "true" }
       containers:
         - name: ollama
-          image: registry.internal:5000/ollama/ollama:0.32.9
+          image: ollama/ollama:0.32.9
           ports: [ { containerPort: 11434 } ]
           env:
             - { name: OLLAMA_HOST, value: "0.0.0.0" }
@@ -263,7 +263,7 @@ tar cf ollama-models.tar -C ollama-data models
 sha256sum ollama-models.tar > ollama-models.tar.sha256
 ```
 
-帶入離線環境、比對 sha256 後，放到 AI 節點(預設 `/opt/eck-llm-mcp/ollama-models.tar`，路徑由 `ollama_models_src` 設定)。**不必手動解壓**：playbook 的 `models` 步驟會判斷 tar 或目錄、匯入 PV，並檢查每個模型 manifest 引用的 blob 是否齊全、大小是否一致。
+帶入離線環境、比對 sha256 後，放到 AI 節點(預設 `/opt/eck-llm-mcp/ollama-models.tar`，路徑由 `ollama_models_src` 設定)。**不必手動解壓**：playbook 的 `models` 步驟在 PV 缺任一模型時解開 tar 到 PV，並確認各模型 manifest 都在(打包與搬運的完整性靠 `package/pull.sh` 產生的 SHA256SUMS 校驗)。
 
 ```bash
 ansible-playbook site.yml --tags models          # 只匯入模型
@@ -307,7 +307,7 @@ spec:
       nodeSelector: { ai-workload: "true" }
       containers:
         - name: open-webui
-          image: registry.internal:5000/open-webui/open-webui:v0.11.0
+          image: ghcr.io/open-webui/open-webui:v0.11.0
           ports: [ { containerPort: 8080 } ]
           env:
             - { name: OLLAMA_BASE_URL, value: "http://ollama.ai.svc:11434" }
@@ -346,7 +346,7 @@ kubectl -n ai get svc open-webui -o jsonpath='{.status.loadBalancer.ingress[0].i
 
 > `ENABLE_SIGNUP` 屬 Open WebUI 的持久化設定：首次啟動後值存進 DB，之後改環境變數不會生效，所以不再用「改 env 再重啟」關註冊。
 
-1. 用 playbook 印出的 admin 帳密登入 `http://<Open-WebUI-VIP>`。
+1. 用 playbook 印出的 admin 帳密登入 `https://<Open-WebUI-VIP>`(nginx sidecar 終止 TLS，憑證由 cert-manager 的 `ca-issuer` 簽發，SAN 為該 VIP)。
 2. 在 **Admin → Users** 建立其餘使用者帳號(多人使用)。
 3. 對話框選模型 `qwen3.6:35b`,問「你好,請自我介紹」→ 應正常回覆。
 
@@ -420,7 +420,7 @@ spec:
       nodeSelector: { ai-workload: "true" }
       containers:
         - name: es-mcp
-          image: registry.internal:5000/mcp/elasticsearch:0.4.6
+          image: docker.elastic.co/mcp/elasticsearch:0.4.6
           args: ["http"]                          # ⭐必要:streamable-HTTP 子命令
           env:
             - { name: ES_URL, value: "https://prod-es-http.elastic-stack.svc:9200" }

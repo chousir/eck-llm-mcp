@@ -6,9 +6,9 @@ ok()   { echo "  [PASS] $*"; }
 bad()  { echo "  [FAIL] $*"; FAIL=1; }
 warn() { echo "  [WARN] $*"; }
 
-OLLAMA="{{ ollama_internal_url }}"
-MCP="{{ es_mcp_internal_url }}"
-MCP_BASE="http://es-mcp.{{ ai_namespace }}.svc:{{ es_mcp_service_port }}"
+OLLAMA="{{ ollama_url }}"
+MCP="{{ es_mcp_url }}"
+MCP_BASE="http://es-mcp.{{ ai_namespace }}.svc:8080"
 PRIMARY="{{ ollama_primary_model }}"
 
 # ---- MCP streamable HTTP：回應可能是 JSON 或 SSE（data: {...}） ----
@@ -30,26 +30,22 @@ echo "1) Open WebUI -> Ollama：模型清單"
 TAGS=$(curl -s -m 20 "$OLLAMA/api/tags")
 if [ -z "$TAGS" ]; then bad "連不到 $OLLAMA/api/tags"; else
 {% for m in ollama_models %}
-  echo "$TAGS" | jq -re '.models[].name' | grep -qFx "{{ m.name }}:{{ m.tag }}" \
-    && ok "{{ m.name }}:{{ m.tag }}" || bad "Ollama 沒有模型 {{ m.name }}:{{ m.tag }}"
+  echo "$TAGS" | jq -re '.models[].name' | grep -qFx "{{ m }}" \
+    && ok "{{ m }}" || bad "Ollama 沒有模型 {{ m }}"
 {% endfor %}
 fi
 
 echo "2) Ollama tool_calls（$PRIMARY）"
-{% if verify_tool_calls | bool %}
 REQ=$(jq -n --arg m "$PRIMARY" '{model:$m,stream:false,
   messages:[{role:"user",content:"What is the weather in Taipei? Use the tool."}],
   tools:[{type:"function",function:{name:"get_weather",description:"Get current weather for a city",
     parameters:{type:"object",properties:{city:{type:"string"}},required:["city"]}}}]}')
-RES=$(curl -s -m {{ verify_tool_calls_timeout }} "$OLLAMA/api/chat" -d "$REQ")
+RES=$(curl -s -m 900 "$OLLAMA/api/chat" -d "$REQ")
 if echo "$RES" | jq -e '(.message.tool_calls | length) > 0' >/dev/null 2>&1; then
   ok "模型回傳 tool_calls"
 else
   bad "模型沒有回傳 tool_calls（檢查 ollama_context_length、模型是否支援工具呼叫）：$(echo "$RES" | head -c 300)"
 fi
-{% else %}
-warn "verify_tool_calls=false，略過"
-{% endif %}
 
 echo "3) Open WebUI -> es-mcp"
 [ "$(curl -s -m 10 "$MCP_BASE/ping")" ] && ok "/ping 有回應" || bad "$MCP_BASE/ping 無回應"
@@ -73,13 +69,13 @@ else
 fi
 
 echo "5) Open WebUI：es-mcp 已註冊"
-TOKEN=$(curl -s -m 20 http://127.0.0.1:{{ open_webui_container_port }}/api/v1/auths/signin \
+TOKEN=$(curl -s -m 20 http://127.0.0.1:8080/api/v1/auths/signin \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg e "$WEBUI_ADMIN_EMAIL" --arg p "$WEBUI_ADMIN_PASSWORD" '{email:$e,password:$p}')" | jq -r '.token // empty')
 if [ -z "$TOKEN" ]; then
   warn "admin 登入失敗（密碼可能已在 UI 改過），略過此項"
 else
-  CFG=$(curl -s -m 20 -H "Authorization: Bearer $TOKEN" http://127.0.0.1:{{ open_webui_container_port }}/api/v1/configs/tool_servers)
+  CFG=$(curl -s -m 20 -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/configs/tool_servers)
   echo "$CFG" | grep -q "es-mcp" && ok "tool_servers 內有 es-mcp" \
     || bad "tool_servers 沒有 es-mcp（DB 內已有舊設定時 env 不會覆蓋，請到 Admin -> Settings -> Integrations 新增）"
 fi

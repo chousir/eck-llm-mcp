@@ -1,0 +1,100 @@
+# Ollama（LLM 推論）+ es-mcp（Elasticsearch MCP Server）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: {{ ai_namespace }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # RWO 本地 PV：新舊 pod 不可同時存在
+  selector:
+    matchLabels: { app: ollama }
+  template:
+    metadata:
+      labels: { app: ollama }
+    spec:
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, effect: NoSchedule }
+      nodeSelector:
+        kubernetes.io/hostname: {{ ai_node_name }}
+      containers:
+        - name: ollama
+          image: {{ ollama_image }}
+          ports:
+            - containerPort: 11434
+          env:
+            - { name: OLLAMA_HOST, value: "0.0.0.0" }
+            - { name: OLLAMA_KEEP_ALIVE, value: "-1" }          # RAM 夠，模型常駐不卸載
+            - { name: OLLAMA_MAX_LOADED_MODELS, value: "3" }    # 主力 + 備援 + 嵌入
+            - { name: OLLAMA_NUM_PARALLEL, value: "4" }
+            - { name: OLLAMA_CONTEXT_LENGTH, value: "{{ ollama_context_length }}" }
+          readinessProbe:
+            httpGet: { path: /api/version, port: 11434 }
+            periodSeconds: 5
+          resources:
+            # 不設 CPU limit：cgroup 限流會讓 Ollama 極慢；執行緒數由 Open WebUI 的 num_thread 控制
+            requests: { memory: 32Gi, cpu: "8" }
+            limits: { memory: {{ ollama_memory_limit }} }
+          volumeMounts:
+            - { name: models, mountPath: /root/.ollama }
+      volumes:
+        - name: models
+          persistentVolumeClaim: { claimName: ollama-models }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: {{ ai_namespace }}
+spec:
+  selector: { app: ollama }
+  ports:
+    - { port: 11434, targetPort: 11434 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-mcp
+  namespace: {{ ai_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: es-mcp }
+  template:
+    metadata:
+      labels: { app: es-mcp }
+    spec:
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, effect: NoSchedule }
+      nodeSelector:
+        kubernetes.io/hostname: {{ ai_node_name }}
+      containers:
+        - name: es-mcp
+          image: {{ es_mcp_image }}
+          args: ["http"]
+          env:
+            - { name: ES_URL, value: "{{ es_url }}" }
+            - { name: ES_USERNAME, value: mcp_user }
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: es-mcp-cred, key: password }
+            - { name: ES_SSL_SKIP_VERIFY, value: "true" }       # ECK 自簽憑證；僅叢集內 pod -> ES
+            - { name: HTTP_ADDRESS, value: "0.0.0.0:8080" }
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /ping, port: 8080 }
+            periodSeconds: 5
+          resources:
+            requests: { memory: 256Mi, cpu: 200m }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-mcp
+  namespace: {{ ai_namespace }}
+spec:
+  selector: { app: es-mcp }
+  ports:
+    - { port: 8080, targetPort: 8080 }

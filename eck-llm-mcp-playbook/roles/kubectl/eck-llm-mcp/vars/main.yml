@@ -1,0 +1,37 @@
+---
+# 內部常數（環境固定，不需修改）
+ai_namespace: ai
+kubectl_cmd: /usr/local/bin/kubectl --kubeconfig=/etc/kubernetes/admin.conf
+manifest_dir: /etc/k8s/eck-llm-mcp
+
+ollama_pv_path: /var/lib/ai/ollama
+openwebui_pv_path: /var/lib/ai/openwebui
+ollama_models_dir: "{{ ollama_pv_path }}/models"
+ollama_primary_model: "{{ ollama_models[0] }}"
+ollama_embed_model: nomic-embed-text:latest
+
+ollama_url: "http://ollama.{{ ai_namespace }}.svc:11434"
+es_mcp_url: "http://es-mcp.{{ ai_namespace }}.svc:8080/mcp"
+# ECK 命名慣例：<name>-es-http、<name>-es-elastic-user；ES 預設啟用 TLS（自簽）
+es_url: "https://{{ eck_es_name }}-es-http.{{ eck_namespace }}.svc:9200"
+es_admin_secret: "{{ eck_es_name }}-es-elastic-user"
+
+# Open WebUI 首次啟動時寫入 DB（之後改要到 Admin -> Settings -> Integrations）
+# access_grants 為空＝只有 admin 能用；這裡開放給所有登入使用者唯讀使用
+webui_tool_server_connections:
+  - type: mcp
+    url: "{{ es_mcp_url }}"
+    path: ""
+    auth_type: none
+    key: ""
+    config:
+      enable: true
+      access_grants:
+        - { principal_type: user, principal_id: "*", permission: read }
+    info:
+      id: es-mcp
+      name: Elasticsearch
+      description: "Elasticsearch read-only tools: list_indices / get_mappings / search / esql / get_shards"
+webui_default_model_params:
+  function_calling: native
+  num_thread: "{{ ollama_num_thread | int }}"

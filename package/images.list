@@ -1,0 +1,6 @@
+# 要打包的映像（原始名稱，不加 registry 位址、不 retag）。
+# 需與 roles/kubectl/eck-llm-mcp/defaults/main.yml 的 *_image 逐字一致（改版本時兩邊一起改）。
+ollama/ollama:0.32.9
+ghcr.io/open-webui/open-webui:v0.11.0
+docker.elastic.co/mcp/elasticsearch:0.4.6
+nginx:1.30-alpine

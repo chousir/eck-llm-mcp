@@ -1,165 +1,36 @@
 ---
-# 覆寫建議：不要直接改本檔，把要改的變數寫到 inventory/group_vars/all.yml
-# （group_vars 優先權高於 role defaults）。README「參數說明」有每個變數的查法。
+# 環境假設（kubespray、單一 cluster、MetalLB、cert-manager 的 ca-issuer）寫死在 vars/main.yml 與模板裡，
+# 見 README「環境假設」。這裡只放可能要改的值；覆寫請寫到 inventory/group_vars/all.yml。
 
-# #####################################################################
-# 【一】必須核對 —— 每個環境幾乎都不同
-# #####################################################################
-
-# 內部 registry 上的映像完整路徑；必須與實際 push 的逐字一致，否則 ImagePullBackOff
-ollama_image: registry.internal:5000/ollama/ollama:0.32.9
-open_webui_image: registry.internal:5000/open-webui/open-webui:v0.11.0
-es_mcp_image: registry.internal:5000/mcp/elasticsearch:0.4.6
-
-# 模型來源（位於 ansible 目標主機上），兩種格式擇一，playbook 自動判斷：
-#   - tar 檔：README「離線準備」打包的 ollama-models.tar（內含 models/blobs、models/manifests）
-#   - 目錄：底下直接是 blobs/ 與 manifests/（或 models/blobs、models/manifests）
-# 只有 PV 上缺模型時才會讀取；模型都已匯入後，這個路徑不存在也沒關係。
-ollama_models_src: /opt/eck-llm-mcp/ollama-models.tar
-
-# AI 元件要跑的 k8s 節點名稱（kubectl get nodes 的 NAME）。
-# 必須就是 ansible 目標主機本身：本地 PV 目錄與模型都寫在目標主機上，preflight 會檢查。
+# AI 元件要跑的節點（kubectl get nodes 的 NAME），必須就是 ansible 目標主機：模型與本地 PV 都在這台。
 ai_node_name: k8s-controller01
 
-# #####################################################################
-# 【二】通常要看一下 —— 預設值依規劃書，環境不同時調整
-# #####################################################################
-
-# ---- kubectl（全部以 root/become 執行）----
-# RHEL 系 sudo 的 secure_path 不含 /usr/local/bin；kubectl 裝在那裡時請填絕對路徑
-kubectl_bin: kubectl
-# kubeadm: /etc/kubernetes/admin.conf、k3s: /etc/rancher/k3s/k3s.yaml、rke2: /etc/rancher/rke2/rke2.yaml
-kubectl_kubeconfig: /etc/kubernetes/admin.conf
-
-# ---- 既有 ECK Elasticsearch ----
-# 兩者留空 = 自動偵測（叢集內只有一個 Elasticsearch 資源時直接採用；多個時 preflight 會列出清單請你指定）
-eck_es_name: ""
-eck_namespace: ""
-# 以下留空 = 依 ECK 命名慣例自動推導，通常不用填：
-#   es_mcp_es_url         -> https://<eck_es_name>-es-http.<eck_namespace>.svc:9200（es-mcp pod 內用）
-#   es_api_url            -> https://<<eck_es_name>-es-http 的 ClusterIP>:9200（目標主機建 ES 帳號用）
-#   es_admin_secret_name  -> <eck_es_name>-es-elastic-user
-es_mcp_es_url: ""
-es_api_url: ""
-es_admin_secret_name: ""
-es_admin_secret_key: elastic
-
-# ---- Open WebUI 對外 ----
-# 沒有 MetalLB / LB IP pool 時改 NodePort（或 ClusterIP + 自行 Ingress）
-open_webui_service_type: LoadBalancer
-# 例：MetalLB 指定 VIP -> { metallb.universe.tf/loadBalancerIPs: "10.0.0.50" }
-open_webui_service_annotations: {}
-# 首次啟動自動建立的 admin（密碼自動產生並存在 Secret open-webui-secret，查法見部署結束訊息）
-webui_admin_email: admin@example.local
-webui_admin_name: Admin
-# 留空 = 自動產生。只在「第一次啟動、尚無任何使用者」時生效，之後請在 UI 改密碼。
-webui_admin_password: ""
-
-# ---- Registry 需帳密時（例如 Harbor）：填 ai namespace 內既有 docker-registry Secret 名稱 ----
-image_pull_secrets: []
-
-# ---- 排程 ----
-ai_node_label_key: ai-workload
-ai_node_label_value: "true"
-# k8s < 1.24 的 control-plane taint 叫 node-role.kubernetes.io/master，兩個都列
-ai_tolerations:
-  - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
-  - { key: node-role.kubernetes.io/master, operator: Exists, effect: NoSchedule }
-
-# ---- 本地儲存（ai_node_name 主機上）----
-local_pv_base_dir: /var/lib/ai
-ollama_pv_path: "{{ local_pv_base_dir }}/ollama"
-openwebui_pv_path: "{{ local_pv_base_dir }}/openwebui"
-# 注意：PV/PVC 建立後容量不可變更，要改需先刪除重建
-ollama_pv_capacity: 60Gi
-openwebui_pv_capacity: 10Gi
-
-# ---- 模型 ----
-# 第一個是主力模型（Open WebUI 預設模型、verify 的 tool_calls 測試對象）
+# 模型 tar（package/pull.sh 產生的 ollama-models.tar），只有 PV 上缺模型時才會讀取。
+ollama_models_src: /opt/eck-llm-mcp/ollama-models.tar
+# name:tag；第一個是主力模型（預設模型、tool_calls 驗證對象），需與 package/models.list 對應
 ollama_models:
-  - { name: qwen3.6, tag: "35b" }
-  - { name: nomic-embed-text, tag: latest }
-  # - { name: qwen3-coder, tag: "30b" }   # 規劃書 §4.4 備援；有帶進來才打開
-# RAG 嵌入模型（必須也列在 ollama_models 裡）
-ollama_embed_model: nomic-embed-text:latest
+  - qwen3.6:35b
+  - nomic-embed-text:latest
+  # - qwen3-coder:30b      # 規劃書 §4.4 備援；有打包才打開
 
-# ---- ES 唯讀帳號 ----
-mcp_role_name: mcp_readonly
-mcp_user_name: mcp_user
-# es-mcp 可讀的 index；建議收斂成實際要查的 pattern，例如 ["netflow-*", "logs-*"]
+# 既有 ECK 的 Elasticsearch 資源（stack，不是 operator）。查法：kubectl get elasticsearch -A
+eck_es_name: prod
+eck_namespace: elastic-stack
+
+# es-mcp 唯讀帳號可讀的 index；建議收斂成實際要查的 pattern，例如 ["netflow-*"]
 mcp_index_patterns: ["*"]
 
-# ---- 安全（選用）----
-# true = 建 NetworkPolicy：只有 open-webui 能連 es-mcp 與 ollama（需 CNI 支援 NetworkPolicy）
-enable_network_policy: false
-# ai namespace 的 Pod Security Admission 等級；Ollama/Open WebUI 以 root 執行，不能是 restricted。留空 = 不設
-ai_namespace_pod_security: baseline
+# 映像：原始名稱，節點直接 pull（不加 registry 位址）
+ollama_image: ollama/ollama:0.32.9
+open_webui_image: ghcr.io/open-webui/open-webui:v0.11.0
+es_mcp_image: docker.elastic.co/mcp/elasticsearch:0.4.6
+nginx_image: nginx:1.30-alpine
 
-# #####################################################################
-# 【三】調校 —— 量測後再調
-# #####################################################################
+# ---- Ollama（CPU 推論；調校方式見 README「調校」）----
+ollama_context_length: 32768   # 太小會截掉工具定義，模型就不呼叫工具
+ollama_num_thread: 32          # 推論執行緒數；controller 兼跑 etcd/apiserver，要比核心數少
+ollama_memory_limit: 128Gi
 
-# ---- Ollama ----
-# context 太小會把 system prompt / 工具定義截掉，模型就不會呼叫 MCP 工具；
-# 調大會增加 KV cache 記憶體（× ollama_num_parallel）
-ollama_context_length: 32768
-ollama_num_parallel: "2"
-# 主力 + 嵌入 同時常駐；啟用備援模型且要同時載入時改 3 並加大 memory limit
-ollama_max_loaded_models: "2"
-ollama_keep_alive: "24h"
-# 不要設 CPU limit：Ollama 依主機核心數開執行緒，被 cgroup 限流會極慢
-ollama_resources_requests_memory: 32Gi
-ollama_resources_requests_cpu: "8"
-ollama_resources_limits_memory: 48Gi
-
-# ---- es-mcp ----
-es_mcp_es_ssl_skip_verify: "true"   # ECK 自簽憑證
-es_mcp_resources_requests_memory: 256Mi
-es_mcp_resources_requests_cpu: 200m
-es_mcp_resources_limits_memory: 512Mi
-
-# ---- Open WebUI ----
-open_webui_resources_requests_memory: 2Gi
-open_webui_resources_requests_cpu: "1"
-open_webui_resources_limits_memory: 4Gi
-
-# ---- 部署 / 驗證 ----
-rollout_timeout: 600s
-# verify 會對主力模型送一次 tool-calling 測試（規劃書 §4.2）；CPU 首次載入 35B 需數分鐘
-verify_tool_calls: true
-verify_tool_calls_timeout: 900
-
-# #####################################################################
-# 內部值 —— 一般不需修改
-# #####################################################################
-ai_namespace: ai
-ollama_service_port: 11434
-es_mcp_service_port: 8080
-open_webui_container_port: 8080
-open_webui_service_port: 80
-manifest_dir: "{{ local_pv_base_dir }}/manifests"
-ollama_models_dir: "{{ ollama_pv_path }}/models"
-
-kubectl_cmd: "{{ kubectl_bin }} --kubeconfig={{ kubectl_kubeconfig }}"
-ollama_primary_model: "{{ ollama_models[0].name }}:{{ ollama_models[0].tag }}"
-ollama_internal_url: "http://ollama.{{ ai_namespace }}.svc:{{ ollama_service_port }}"
-es_mcp_internal_url: "http://es-mcp.{{ ai_namespace }}.svc:{{ es_mcp_service_port }}/mcp"
-
-# Open WebUI 首次啟動時寫入 DB 的 MCP 連線（之後改要到 Admin → Settings → Integrations）
-# access_grants 為空 = 只有 admin 能用，這裡開放給所有登入使用者唯讀使用
-webui_tool_server_connections:
-  - type: mcp
-    url: "{{ es_mcp_internal_url }}"
-    path: ""
-    auth_type: none
-    key: ""
-    config:
-      enable: true
-      access_grants:
-        - { principal_type: user, principal_id: "*", permission: read }
-    info:
-      id: es-mcp
-      name: Elasticsearch
-      description: "Elasticsearch read-only tools: list_indices / get_mappings / search / esql / get_shards"
-webui_default_model_params:
-  function_calling: native
+# ---- Open WebUI HTTPS ----
+cert_issuer_name: ca-issuer    # CA 型 ClusterIssuer
+open_webui_vip: ""             # 空＝MetalLB 自動配發；要固定 IP 時填

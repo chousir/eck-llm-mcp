@@ -1,0 +1,15 @@
+# 先建 Service 取得 MetalLB IP，憑證的 SAN 要用這個 IP（見 30-webui.yaml.j2）
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: {{ ai_namespace }}
+{% if open_webui_vip | length > 0 %}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "{{ open_webui_vip }}"
+{% endif %}
+spec:
+  type: LoadBalancer
+  selector: { app: open-webui }
+  ports:
+    - { name: https, port: 443, targetPort: 8443 }

@@ -1,0 +1,139 @@
+# Open WebUI + nginx sidecar（終止 TLS）；憑證由 cert-manager 的 {{ cert_issuer_name }} 簽發，SAN 為 Service IP
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: open-webui-tls
+  namespace: {{ ai_namespace }}
+spec:
+  secretName: open-webui-tls
+  issuerRef: { name: {{ cert_issuer_name }}, kind: ClusterIssuer }
+  ipAddresses: ["{{ webui_vip }}"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-webui-nginx
+  namespace: {{ ai_namespace }}
+data:
+  nginx.conf: |
+    events {}
+    http {
+      map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+      server {
+        listen 8443 ssl;
+        ssl_certificate     /etc/nginx-tls/tls.crt;
+        ssl_certificate_key /etc/nginx-tls/tls.key;
+        client_max_body_size 512m;               # 知識庫檔案上傳
+        location / {
+          proxy_pass http://127.0.0.1:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header Upgrade $http_upgrade;     # WebSocket
+          proxy_set_header Connection $connection_upgrade;
+          proxy_buffering off;                        # 串流回答
+          proxy_read_timeout 3600s;
+          proxy_send_timeout 3600s;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: {{ ai_namespace }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # SQLite 在 RWO 本地 PV：不可有兩個 pod 同時寫
+  selector:
+    matchLabels: { app: open-webui }
+  template:
+    metadata:
+      labels: { app: open-webui }
+      annotations:
+        # Service IP 變動時（Service 被重建）滾動重啟，nginx 才會載入新憑證
+        eck-llm-mcp/vip: "{{ webui_vip }}"
+    spec:
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, effect: NoSchedule }
+      nodeSelector:
+        kubernetes.io/hostname: {{ ai_node_name }}
+      containers:
+        - name: open-webui
+          image: {{ open_webui_image }}
+          ports:
+            - containerPort: 8080
+          env:
+            - { name: WEBUI_AUTH, value: "true" }
+            # 首次啟動（DB 內尚無使用者）自動建立 admin，並自動關閉開放註冊
+            - { name: WEBUI_ADMIN_EMAIL, value: admin@example.com }
+            - { name: WEBUI_ADMIN_NAME, value: Admin }
+            - name: WEBUI_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: open-webui-secret, key: WEBUI_ADMIN_PASSWORD }
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: open-webui-secret, key: WEBUI_SECRET_KEY }
+            - { name: WEBUI_SESSION_COOKIE_SECURE, value: "true" }
+            - { name: WEBUI_AUTH_COOKIE_SECURE, value: "true" }
+            # air-gap：不連外、不等 api.openai.com 逾時
+            - { name: OFFLINE_MODE, value: "true" }
+            - { name: ENABLE_OPENAI_API, value: "false" }
+            - { name: ENABLE_COMMUNITY_SHARING, value: "false" }
+            - { name: OLLAMA_BASE_URL, value: "{{ ollama_url }}" }
+            - { name: DEFAULT_MODELS, value: "{{ ollama_primary_model }}" }
+            - { name: BYPASS_MODEL_ACCESS_CONTROL, value: "true" }   # 只有本機模型，全體使用者可見
+            - name: DEFAULT_MODEL_PARAMS
+              value: {{ webui_default_model_params | to_json | to_json }}
+            # 首次啟動寫入 DB；之後要改請到 Admin -> Settings -> Integrations
+            - name: TOOL_SERVER_CONNECTIONS
+              value: {{ webui_tool_server_connections | to_json | to_json }}
+            - { name: RAG_EMBEDDING_ENGINE, value: ollama }
+            - { name: RAG_EMBEDDING_MODEL, value: "{{ ollama_embed_model }}" }
+            - { name: RAG_OLLAMA_BASE_URL, value: "{{ ollama_url }}" }
+          startupProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 10
+          resources:
+            requests: { memory: 2Gi, cpu: "1" }
+            limits: { memory: 4Gi }
+          volumeMounts:
+            - { name: data, mountPath: /app/backend/data }
+        - name: nginx-tls
+          image: {{ nginx_image }}
+          # nginx 不會發現 cert-manager 續簽後更新的 Secret，所以每 6 小時 reload 一次；
+          # nginx 自己結束時迴圈也結束，容器會重啟。
+          command:
+            - /bin/sh
+            - -c
+            - |
+              nginx -g 'daemon off;' &
+              pid=$!
+              trap 'nginx -s quit; wait "$pid"; exit 0' TERM INT
+              while kill -0 "$pid" 2>/dev/null; do
+                sleep 21600 & wait $!
+                nginx -s reload
+              done
+              wait "$pid"
+          ports:
+            - containerPort: 8443
+          readinessProbe:
+            tcpSocket: { port: 8443 }
+            periodSeconds: 5
+          volumeMounts:
+            - { name: nginx-config, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: tls-cert, mountPath: /etc/nginx-tls, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: openwebui-data }
+        - name: nginx-config
+          configMap: { name: open-webui-nginx }
+        - name: tls-cert
+          secret: { secretName: open-webui-tls }

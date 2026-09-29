@@ -1,55 +1,28 @@
 ---
-# 建立 mcp_readonly 角色 + mcp_user 帳號（規劃書 §6.2）。
-# ES 位址、elastic Secret 都由 preflight.yml 推導（es_resolved_*）；mcp_user_password 由 secrets.yml 提供。
-
-- name: 讀取 elastic 超級使用者密碼（{{ es_resolved_namespace }}/{{ es_resolved_admin_secret }}）
-  command: >-
-    {{ kubectl_cmd }} -n {{ es_resolved_namespace }} get secret {{ es_resolved_admin_secret }}
-    -o jsonpath={.data.{{ es_admin_secret_key }}}
-  register: es_admin_secret_lookup
+# 在既有 ECK 的 ES 建唯讀角色 mcp_readonly 與帳號 mcp_user（規劃書 §6.2）。
+# 用 ECK 的 elastic 超級使用者密碼操作；mcp_user 密碼來自 es-mcp-cred（secrets.yml 產生）。
+- name: 讀取 elastic 密碼、mcp_user 密碼、ES ClusterIP
+  command: "{{ kubectl_cmd }} {{ item.args }}"
+  register: es_lookup
   changed_when: false
-  failed_when: false
-  no_log: true
+  no_log: "{{ item.secret }}"
+  loop:
+    - { secret: true,  args: "-n {{ eck_namespace }} get secret {{ es_admin_secret }} -o jsonpath={.data.elastic}" }
+    - { secret: true,  args: "-n {{ ai_namespace }} get secret es-mcp-cred -o jsonpath={.data.password}" }
+    - { secret: false, args: "-n {{ eck_namespace }} get svc {{ eck_es_name }}-es-http -o jsonpath={.spec.clusterIP}" }
+  loop_control:
+    label: "{{ item.args.split()[-1] }}"
 
-- name: 找不到 elastic 密碼就中止並給清楚訊息
-  assert:
-    that: es_admin_secret_lookup.rc == 0 and es_admin_secret_lookup.stdout | length > 0
-    quiet: true
-    fail_msg: >-
-      讀不到 Secret {{ es_resolved_namespace }}/{{ es_resolved_admin_secret }} 的 key
-      "{{ es_admin_secret_key }}"。查法：kubectl -n {{ es_resolved_namespace }} get secret；
-      ECK 預設是 <ES 名稱>-es-elastic-user，可用 es_admin_secret_name 覆寫。
-
-- name: 解碼 elastic 密碼
+- name: 整理連線資訊
   set_fact:
-    es_admin_password: "{{ es_admin_secret_lookup.stdout | b64decode }}"
+    es_admin_password: "{{ es_lookup.results[0].stdout | b64decode }}"
+    mcp_user_password: "{{ es_lookup.results[1].stdout | b64decode }}"
+    es_api_url: "https://{{ es_lookup.results[2].stdout }}:9200"
   no_log: true
 
-- name: 確認可從此主機連到 ES（{{ es_resolved_api_url }}）
+- name: 建立/更新 mcp_readonly 角色
   uri:
-    url: "{{ es_resolved_api_url }}/_cluster/health"
-    user: elastic
-    password: "{{ es_admin_password }}"
-    force_basic_auth: true
-    validate_certs: false
-    status_code: 200
-    timeout: 20
-  register: es_health
-  no_log: true
-  failed_when: false
-
-- name: ES 連不到就中止
-  assert:
-    that: es_health.status | default(0) == 200
-    quiet: true
-    fail_msg: >-
-      連不到 {{ es_resolved_api_url }}/_cluster/health（HTTP {{ es_health.status | default('無回應') }}）。
-      此位址由目標主機發起：ClusterIP 需要 kube-proxy 可達；不可達時把 es_api_url 設成
-      ES 的 LoadBalancer VIP 或 NodePort，例如 https://10.0.0.60:9200。
-
-- name: 建立/更新 {{ mcp_role_name }} 唯讀角色
-  uri:
-    url: "{{ es_resolved_api_url }}/_security/role/{{ mcp_role_name }}"
+    url: "{{ es_api_url }}/_security/role/mcp_readonly"
     method: PUT
     user: elastic
     password: "{{ es_admin_password }}"
@@ -61,12 +34,13 @@
       indices:
         - names: "{{ mcp_index_patterns }}"
           privileges: ["read", "view_index_metadata", "monitor"]
-    status_code: [200, 201]
+  register: es_role
+  changed_when: es_role.json.role.created | default(false)
   no_log: true
 
-- name: 建立/更新 {{ mcp_user_name }} 帳號
+- name: 建立/更新 mcp_user 帳號
   uri:
-    url: "{{ es_resolved_api_url }}/_security/user/{{ mcp_user_name }}"
+    url: "{{ es_api_url }}/_security/user/mcp_user"
     method: PUT
     user: elastic
     password: "{{ es_admin_password }}"
@@ -75,7 +49,8 @@
     body_format: json
     body:
       password: "{{ mcp_user_password }}"
-      roles: ["{{ mcp_role_name }}"]
+      roles: ["mcp_readonly"]
       full_name: "MCP readonly"
-    status_code: [200, 201]
+  register: es_user
+  changed_when: es_user.json.created | default(false)
   no_log: true

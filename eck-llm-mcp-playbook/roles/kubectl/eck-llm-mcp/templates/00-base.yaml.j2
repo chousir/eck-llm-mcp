@@ -1,19 +1,15 @@
+# namespace + 本地 PV/PVC（PV/PVC 容量建立後不可變更，要改須先刪除重建）
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ ai_namespace }}
-{% if ai_namespace_pod_security | length > 0 %}
-  labels:
-    pod-security.kubernetes.io/enforce: {{ ai_namespace_pod_security }}
-{% endif %}
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: ollama-models
 spec:
-  capacity:
-    storage: {{ ollama_pv_capacity }}
+  capacity: { storage: 60Gi }
   accessModes: ["ReadWriteOnce"]
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
@@ -23,9 +19,7 @@ spec:
     required:
       nodeSelectorTerms:
         - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values: ["{{ ai_node_hostname_label }}"]
+            - { key: kubernetes.io/hostname, operator: In, values: ["{{ ai_node_name }}"] }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -37,16 +31,14 @@ spec:
   storageClassName: ""
   volumeName: ollama-models
   resources:
-    requests:
-      storage: {{ ollama_pv_capacity }}
+    requests: { storage: 60Gi }
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: openwebui-data
 spec:
-  capacity:
-    storage: {{ openwebui_pv_capacity }}
+  capacity: { storage: 10Gi }
   accessModes: ["ReadWriteOnce"]
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
@@ -56,9 +48,7 @@ spec:
     required:
       nodeSelectorTerms:
         - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values: ["{{ ai_node_hostname_label }}"]
+            - { key: kubernetes.io/hostname, operator: In, values: ["{{ ai_node_name }}"] }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -70,5 +60,4 @@ spec:
   storageClassName: ""
   volumeName: openwebui-data
   resources:
-    requests:
-      storage: {{ openwebui_pv_capacity }}
+    requests: { storage: 10Gi }

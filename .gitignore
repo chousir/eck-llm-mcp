@@ -1,0 +1,2 @@
+# 離線資料包（映像 tar、模型 blob 等大檔）：由 package/*.sh 產生，不進版控
+/package/data/

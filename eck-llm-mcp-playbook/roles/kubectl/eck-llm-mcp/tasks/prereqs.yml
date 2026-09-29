@@ -1,47 +1,19 @@
 ---
-# namespace + 本地 PV/PVC，並確認 PVC 已綁定。
+# PV 目錄 + namespace / 本地 PV / PVC
+- name: 建立本地 PV 目錄與 manifest 目錄
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: ["{{ ollama_pv_path }}", "{{ openwebui_pv_path }}", "{{ manifest_dir }}"]
 
-# 刪掉 ai namespace 後重跑時，PV（Retain）會停在 Released 並記著舊 PVC 的 UID，
-# 新 PVC 永遠綁不上。這兩個 PV 是本 playbook 專用、資料保留在主機上，所以直接解除舊綁定讓新 PVC 重新綁回。
-- name: 讀取既有本地 PV 狀態
-  command: "{{ kubectl_cmd }} get pv {{ item }} -o jsonpath={.status.phase} --ignore-not-found"
-  register: pv_phase
-  changed_when: false
-  loop: [ollama-models, openwebui-data]
+- name: Render 00-base.yaml
+  template:
+    src: 00-base.yaml.j2
+    dest: "{{ manifest_dir }}/00-base.yaml"
+    mode: "0644"
 
-- name: 解除 Released PV 的舊綁定（資料保留）
-  command: >-
-    {{ kubectl_cmd }} patch pv {{ item.item }} --type=json
-    -p='[{"op":"remove","path":"/spec/claimRef"}]'
-  loop: "{{ pv_phase.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  when: item.stdout == 'Released'
-
-- name: 建立/更新 namespace 與本地 PV/PVC
-  include_tasks:
-    file: apply_manifest.yml
-    apply:
-      tags: [prereqs, deploy]
-  vars:
-    manifest: { name: prereqs, template: prereqs.yaml.j2 }
-
-- name: 等待 PVC 綁定
-  command: >-
-    {{ kubectl_cmd }} -n {{ ai_namespace }} get pvc ollama-models openwebui-data
-    -o jsonpath={.items[*].status.phase}
-  register: pvc_phase
-  changed_when: false
-  until: pvc_phase.stdout.split() | select('equalto', 'Bound') | list | length == 2
-  retries: 12
-  delay: 5
-  failed_when: false
-
-- name: PVC 綁定失敗時中止並說明
-  fail:
-    msg: |
-      PVC 未全部 Bound（目前：{{ pvc_phase.stdout }}）。請檢查：
-        kubectl get pv ollama-models openwebui-data -o wide
-        kubectl -n {{ ai_namespace }} describe pvc ollama-models openwebui-data
-      常見原因：PV 容量與 PVC 不符（PV 建立後容量不可改，需刪除重建）、PV 被其他 PVC 佔用。
-  when: pvc_phase.stdout.split() | select('equalto', 'Bound') | list | length != 2
+- name: Apply 00-base.yaml（namespace + PV/PVC）
+  command: "{{ kubectl_cmd }} apply -f {{ manifest_dir }}/00-base.yaml"
+  register: apply_result
+  changed_when: apply_result.stdout is search('created|configured')

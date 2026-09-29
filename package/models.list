@@ -1,0 +1,4 @@
+# 要打包的 Ollama 模型（name:tag），需與 defaults/main.yml 的 ollama_models 對應。
+qwen3.6:35b
+nomic-embed-text:latest
+# qwen3-coder:30b    # 規劃書 §4.4 備援；要用才取消註解
