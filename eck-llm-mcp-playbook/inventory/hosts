@@ -1,3 +1,5 @@
 [k8s_controller]
-# TODO: 改成實際的連線資訊
+# TODO: 改成實際的連線資訊（ansible_host 必須就是 ai_node_name 那台節點）。
+# 直接在該節點上執行 ansible 時，改成：
+#   k8s-controller01 ansible_connection=local
 k8s-controller01 ansible_host=CHANGEME ansible_user=CHANGEME

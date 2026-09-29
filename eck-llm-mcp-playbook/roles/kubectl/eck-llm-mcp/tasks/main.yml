@@ -1,37 +1,82 @@
 ---
 # 執行順序有依賴關係，勿調整：
-# node_prep -> prereqs(namespace/PV) -> model_staging -> secrets -> es_security
-# -> ollama/es-mcp/open-webui -> webui_info
-# secrets 必須在 es_security 之前，因為 es_security 要用 secrets.yml 產生/讀回的 mcp_user_password；
-# secrets 也必須在 es-mcp/open-webui 部署之前，兩者的 Deployment 都靠 secretKeyRef 讀密碼。
+# preflight -> node_prep -> prereqs(namespace/PV) -> models -> secrets -> ollama
+# -> es_security -> es-mcp -> open-webui -> (networkpolicy) -> verify -> info
+#
+# tags：
+#   always       preflight、secrets（唯讀解析 + 補建 Secret；任何 tag 組合都需要它們的變數）
+#   prereqs      節點標籤、PV 目錄、namespace/PV/PVC
+#   models       匯入 Ollama 模型
+#   es_security  建立 ES 唯讀角色與帳號
+#   deploy       所有 k8s 資源（含 prereqs、es_security）
+#   verify       部署後的連線驗證
+# 第一次部署請不要加 --tags（secrets 需要 namespace 已存在）。
+
+- name: Preflight（解析叢集與 ECK 資訊，不改任何東西）
+  import_tasks: preflight.yml
+  tags: [always]
 
 - name: 節點標籤與本地 PV 目錄
   import_tasks: node_prep.yml
+  tags: [prereqs, deploy]
 
 - name: 建立/更新 namespace 與本地 PV/PVC
-  import_tasks: apply_manifest.yml
-  vars:
-    manifest: { name: prereqs, template: prereqs.yaml.j2 }
+  import_tasks: prereqs.yml
+  tags: [prereqs, deploy]
 
-- name: 匯入 Ollama 模型 blob（staging -> PV）
-  import_tasks: model_staging.yml
+- name: 匯入 Ollama 模型（來源 -> PV）
+  import_tasks: models.yml
+  tags: [models]
 
-- name: 產生/讀回 Secret（WEBUI_SECRET_KEY、mcp_user 密碼）
+- name: 產生/讀回 Secret（open-webui-secret、es-mcp-cred）
   import_tasks: secrets.yml
+  tags: [always]
+
+- name: 部署 Ollama
+  include_tasks:
+    file: apply_manifest.yml
+    apply:
+      tags: [deploy]
+  vars:
+    manifest: { name: ollama, template: ollama.yaml.j2, deployment: ollama }
+  tags: [deploy]
 
 - name: 建立 ES 唯讀角色與帳號
   import_tasks: es_security.yml
-  tags: [es_security]
+  tags: [es_security, deploy]
 
-- name: 部署 Ollama / es-mcp / Open WebUI
-  include_tasks: apply_manifest.yml
-  loop:
-    - { name: ollama,      template: ollama.yaml.j2,      deployment: ollama }
-    - { name: es-mcp,      template: es-mcp.yaml.j2,      deployment: es-mcp }
-    - { name: open-webui,  template: open-webui.yaml.j2,  deployment: open-webui }
-  loop_control:
-    loop_var: manifest
-    label: "{{ manifest.name }}"
+- name: 部署 es-mcp
+  include_tasks:
+    file: apply_manifest.yml
+    apply:
+      tags: [deploy]
+  vars:
+    manifest: { name: es-mcp, template: es-mcp.yaml.j2, deployment: es-mcp }
+  tags: [deploy]
+
+- name: 部署 Open WebUI
+  include_tasks:
+    file: apply_manifest.yml
+    apply:
+      tags: [deploy]
+  vars:
+    manifest: { name: open-webui, template: open-webui.yaml.j2, deployment: open-webui }
+  tags: [deploy]
+
+- name: 套用 NetworkPolicy（僅 enable_network_policy 為 true 時）
+  include_tasks:
+    file: apply_manifest.yml
+    apply:
+      tags: [deploy]
+  vars:
+    manifest: { name: networkpolicy, template: networkpolicy.yaml.j2 }
+  when: enable_network_policy | bool
+  tags: [deploy]
+
+- name: 驗證 Open WebUI / Ollama / es-mcp / ES 連線
+  import_tasks: verify.yml
+  tags: [verify]
 
 - name: 顯示 Open WebUI 存取資訊
   import_tasks: webui_info.yml
+  tags: [verify, deploy]

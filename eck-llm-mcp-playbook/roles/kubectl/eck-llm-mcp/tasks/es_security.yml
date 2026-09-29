@@ -1,57 +1,55 @@
 ---
 # 建立 mcp_readonly 角色 + mcp_user 帳號（規劃書 §6.2）。
-# 這段獨立掛 es_security tag（見 tasks/main.yml），ES VIP 尚未確認時可
-# --skip-tags es_security 先部署其餘元件，之後單獨 --tags es_security 補跑。
+# ES 位址、elastic Secret 都由 preflight.yml 推導（es_resolved_*）；mcp_user_password 由 secrets.yml 提供。
 
-- name: 讀取既有 elastic 超級使用者密碼（{{ es_admin_secret_name }} / {{ es_admin_secret_namespace }}）
-  command: >
-    kubectl -n {{ es_admin_secret_namespace }} get secret {{ es_admin_secret_name }}
+- name: 讀取 elastic 超級使用者密碼（{{ es_resolved_namespace }}/{{ es_resolved_admin_secret }}）
+  command: >-
+    {{ kubectl_cmd }} -n {{ es_resolved_namespace }} get secret {{ es_resolved_admin_secret }}
     -o jsonpath={.data.{{ es_admin_secret_key }}}
-  environment:
-    KUBECONFIG: "{{ kubectl_kubeconfig }}"
   register: es_admin_secret_lookup
   changed_when: false
+  failed_when: false
   no_log: true
 
 - name: 找不到 elastic 密碼就中止並給清楚訊息
-  fail:
-    msg: >
-      讀不到 Secret {{ es_admin_secret_namespace }}/{{ es_admin_secret_name }} 的 key
-      "{{ es_admin_secret_key }}"。請確認 defaults/main.yml 的
-      es_admin_secret_name / es_admin_secret_namespace / es_admin_secret_key
-      是否為實際的 ECK elastic 使用者 Secret。
-  when: es_admin_secret_lookup.stdout | default('') | length == 0
+  assert:
+    that: es_admin_secret_lookup.rc == 0 and es_admin_secret_lookup.stdout | length > 0
+    quiet: true
+    fail_msg: >-
+      讀不到 Secret {{ es_resolved_namespace }}/{{ es_resolved_admin_secret }} 的 key
+      "{{ es_admin_secret_key }}"。查法：kubectl -n {{ es_resolved_namespace }} get secret；
+      ECK 預設是 <ES 名稱>-es-elastic-user，可用 es_admin_secret_name 覆寫。
 
 - name: 解碼 elastic 密碼
   set_fact:
     es_admin_password: "{{ es_admin_secret_lookup.stdout | b64decode }}"
   no_log: true
 
-- name: Preflight - 確認可從此主機連到 ES（{{ es_public_url }}）
+- name: 確認可從此主機連到 ES（{{ es_resolved_api_url }}）
   uri:
-    url: "{{ es_public_url }}/_cluster/health"
-    method: GET
+    url: "{{ es_resolved_api_url }}/_cluster/health"
     user: elastic
     password: "{{ es_admin_password }}"
     force_basic_auth: true
     validate_certs: false
     status_code: 200
+    timeout: 20
   register: es_health
   no_log: true
   failed_when: false
 
-- name: ES 連不到就中止（不要讓 Ollama/es-mcp/Open WebUI 連坐失敗，僅這段標記失敗）
-  fail:
-    msg: >
-      連不到 {{ es_public_url }}/_cluster/health（可能是 es_public_url 尚未改成實際的
-      ES VIP，或該 VIP 從 {{ ai_node_name }} 不可達）。可先用
-      --skip-tags es_security 部署其餘元件，之後補齊 es_public_url 再單獨
-      --tags es_security 執行本段。
-  when: es_health.status is not defined or es_health.status != 200
+- name: ES 連不到就中止
+  assert:
+    that: es_health.status | default(0) == 200
+    quiet: true
+    fail_msg: >-
+      連不到 {{ es_resolved_api_url }}/_cluster/health（HTTP {{ es_health.status | default('無回應') }}）。
+      此位址由目標主機發起：ClusterIP 需要 kube-proxy 可達；不可達時把 es_api_url 設成
+      ES 的 LoadBalancer VIP 或 NodePort，例如 https://10.0.0.60:9200。
 
-- name: 建立/更新 mcp_readonly 唯讀角色
+- name: 建立/更新 {{ mcp_role_name }} 唯讀角色
   uri:
-    url: "{{ es_public_url }}/_security/role/{{ mcp_role_name }}"
+    url: "{{ es_resolved_api_url }}/_security/role/{{ mcp_role_name }}"
     method: PUT
     user: elastic
     password: "{{ es_admin_password }}"
@@ -61,14 +59,14 @@
     body:
       cluster: ["monitor"]
       indices:
-        - names: ["*"]
+        - names: "{{ mcp_index_patterns }}"
           privileges: ["read", "view_index_metadata", "monitor"]
     status_code: [200, 201]
   no_log: true
 
-- name: 建立/更新 mcp_user 帳號
+- name: 建立/更新 {{ mcp_user_name }} 帳號
   uri:
-    url: "{{ es_public_url }}/_security/user/{{ mcp_user_name }}"
+    url: "{{ es_resolved_api_url }}/_security/user/{{ mcp_user_name }}"
     method: PUT
     user: elastic
     password: "{{ es_admin_password }}"

@@ -5,6 +5,9 @@ metadata:
   namespace: {{ ai_namespace }}
 spec:
   replicas: 1
+  # RWO 本地 PV + 32Gi 記憶體：新舊 pod 不可同時存在
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ollama
@@ -14,10 +17,15 @@ spec:
         app: ollama
     spec:
       tolerations:
-        - key: node-role.kubernetes.io/control-plane
-          effect: NoSchedule
+{{ ai_tolerations | to_nice_yaml | trim | indent(8, true) }}
       nodeSelector:
         {{ ai_node_label_key }}: "{{ ai_node_label_value }}"
+{% if image_pull_secrets | length > 0 %}
+      imagePullSecrets:
+{% for s in image_pull_secrets %}
+        - name: {{ s }}
+{% endfor %}
+{% endif %}
       containers:
         - name: ollama
           image: {{ ollama_image }}
@@ -30,6 +38,16 @@ spec:
               value: "{{ ollama_keep_alive }}"
             - name: OLLAMA_NUM_PARALLEL
               value: "{{ ollama_num_parallel }}"
+            - name: OLLAMA_CONTEXT_LENGTH
+              value: "{{ ollama_context_length }}"
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: "{{ ollama_max_loaded_models }}"
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: {{ ollama_service_port }}
+            periodSeconds: 5
+            failureThreshold: 12
           resources:
             requests:
               memory: "{{ ollama_resources_requests_memory }}"

@@ -70,7 +70,7 @@ ghcr.io/open-webui/open-webui:v0.11.0       # 多人前端 + MCP client;需 ≥v
 docker.elastic.co/mcp/elasticsearch:0.4.6   # Elasticsearch MCP,定版不用 latest(見 §1、§6)
 ```
 
-> 版本務必**固定 tag 並記錄**,不要用浮動 `latest`。以 `docker pull` + `skopeo copy` 推入內部 registry。實際 digest 記於 `LLM_MCP/manifests/VERSIONS.md`。
+> 版本務必**固定 tag 並記錄**,不要用浮動 `latest`。以 `docker pull` + `skopeo copy` 推入內部 registry。實際 digest 請自行記錄於版控(例如附錄清冊旁)。
 
 ### 2.2 模型權重(GGUF 量化,最大宗,務必先下載)
 
@@ -86,7 +86,7 @@ nomic-embed-text   # 嵌入模型(RAG 用,§7)~275MB
 > 務必依 §4.2 實測 `qwen3.6:35b` 的 tool_calls 格式能否被 Open WebUI 正確解析;若不穩定,直接切 `qwen3-coder:30b`(不改架構,只換 Ollama 拉的 tag)。
 > 已評估但不採用 `qwen3.8:27b`(dense 27B、CPU 逐 token 成本約本 MoE 的 9×);完整理由見 §4.4。
 
-### 2.4 儲存規劃(k8s-controller 上)
+### 2.3 儲存規劃(k8s-controller 上)
 
 | 用途 | 容量 | 放哪 |
 |---|---|---|
@@ -96,25 +96,27 @@ nomic-embed-text   # 嵌入模型(RAG 用,§7)~275MB
 > §3 的 PV 範本容量(`60Gi`)即依上表 Ollama 那列。controller 為 5×3.85TB SSD RAID5(~15.4TB),空間充裕。
 > 這些 PV 用本地 local PV(比照 ECK 規劃書 master PV 手動建立方式,釘在跑該服務的 controller)。
 
-### 2.5 先期安裝檢查清單
+### 2.4 先期安裝檢查清單
 
 - [ ] §2.1 全部映像已推入內部 registry,tag 已固定並記錄(ollama 0.32.9 / open-webui v0.11.0 / mcp 0.4.6)。
 - [ ] §2.2 全部模型已 `ollama pull`,blob 已打包(§4.3):qwen3.6:35b、qwen3-coder:30b、nomic-embed-text。
 - [ ] §4.2 已驗證 `qwen3.6:35b` 的 tool_calls 輸出格式正確,否則已記錄改用 `qwen3-coder:30b`。
-- [ ] §2.6 其他帶入項備妥(index `.md`、`mcp_user` 建立指令、`WEBUI_SECRET_KEY`)。
+- [ ] §2.5 其他帶入項備妥(index `.md`;`mcp_user` 與 `WEBUI_SECRET_KEY` 由 playbook 產生)。
 - [ ] controller 本地 PV 已規劃(Ollama 模型 60Gi、Open WebUI 資料 10Gi)。
-- [ ] 記錄所有版本號於 `LLM_MCP/manifests/VERSIONS.md`(含映像 digest)與本規劃書附錄。
+- [ ] 記錄所有版本號(含映像 digest)於本規劃書附錄。
 
-### 2.6 其他帶入項(非映像 / 非模型,易漏)
+### 2.5 其他帶入項(非映像 / 非模型,易漏)
 
 | 項目 | 說明 |
 |---|---|
-| 各 index 語意說明 `.md` | 每個 index 一份(§7.1),納入版控隨規劃書搬遷。範例:`LLM_MCP/schema-docs/`。 |
+| 各 index 語意說明 `.md` | 每個 index 一份(§7.1),納入版控隨規劃書搬遷(範本見 §7.1)。 |
 | Open WebUI 知識庫 | index `.md` 上傳後索引存於 `openwebui-data` 卷(內建向量庫,**不在 ES**),不隨 ES 快照走;帶入後需在目標端重新上傳 / 重新嵌入(§7.2)。 |
 | `mcp_readonly` 角色 + `mcp_user` 帳號 | 建立指令見 §6.2,須在目標 ES 執行。 |
-| `WEBUI_SECRET_KEY` 固定值 | 一次產生後固定保存(§5.1)。 |
+| `WEBUI_SECRET_KEY` / admin 密碼 | 由 playbook 產生並存於 Secret `open-webui-secret`,重跑不會更換(§5.1)。 |
 
 ---
+
+> **§3–§6 的 YAML 與指令是設計說明／手動等效步驟。實際部署以 `eck-llm-mcp-playbook/` 的 `ansible-playbook site.yml` 為準**(playbook 為了單次部署、離線與冪等做了調整，例如 Recreate 策略、readiness probe、`OLLAMA_CONTEXT_LENGTH`、`OFFLINE_MODE`、admin 自動建立、es-mcp 自動註冊)，兩者不一致時以 playbook 與 README 為準。
 
 ## 3. 通用前置(Namespace、controller 排程、本地 PV)
 
@@ -163,7 +165,7 @@ spec:
   resources: { requests: { storage: 60Gi } }
 ```
 
-> 容量依 §2.4:`ollama-models` 用 60Gi。另建 `openwebui-data` 同結構 PV/PVC(`path` `/var/lib/ai/openwebui`,~10Gi;含知識庫向量索引)。在 controller01 上先 `mkdir -p /var/lib/ai/{ollama,openwebui}`。
+> 容量依 §2.3:`ollama-models` 用 60Gi。另建 `openwebui-data` 同結構 PV/PVC(`path` `/var/lib/ai/openwebui`,~10Gi;含知識庫向量索引)。在 controller01 上先 `mkdir -p /var/lib/ai/{ollama,openwebui}`。
 
 ---
 
@@ -246,24 +248,26 @@ curl -s http://localhost:11434/api/chat -d '{
 
 ### 4.3 ⭐ 模型離線搬遷(關鍵)
 
-模型 blob 不在映像裡。在有網路環境先 pull,再搬 blob:
+模型 blob 不在映像裡。在有網路環境先 pull,再搬 blob。**建議用與 §2.1 相同版本的 Ollama 容器 pull,目錄位置才確定**(Linux 用 install.sh 裝的 Ollama,模型在 `/usr/share/ollama/.ollama/models`,不是 `~/.ollama/models`):
 
 ```bash
-# 有網路的機器(或臨時 Ollama,版本需與 §2.1 一致:0.32.9)
-ollama pull qwen3.6:35b
-ollama pull qwen3-coder:30b
-ollama pull nomic-embed-text
-# 模型存於 ~/.ollama/models(含 blobs/ 與 manifests/)
-tar czf ollama-models.tgz -C ~/.ollama models
+# 有網路的機器；OLLAMA_MODELS 目錄即最後要搬的內容
+mkdir -p ./ollama-data
+docker run -d --name ollama-pull -v $PWD/ollama-data:/root/.ollama ollama/ollama:0.32.9
+docker exec ollama-pull ollama pull qwen3.6:35b
+docker exec ollama-pull ollama pull nomic-embed-text
+# docker exec ollama-pull ollama pull qwen3-coder:30b   # 備援(§4.4),要用才帶
+docker rm -f ollama-pull
+# blob 本身已壓縮，不必再 gzip；解開後會有 models/blobs 與 models/manifests
+tar cf ollama-models.tar -C ollama-data models
+sha256sum ollama-models.tar > ollama-models.tar.sha256
 ```
 
-帶入離線環境後,解壓到 controller01 的 PV 目錄:
+帶入離線環境、比對 sha256 後，放到 AI 節點(預設 `/opt/eck-llm-mcp/ollama-models.tar`，路徑由 `ollama_models_src` 設定)。**不必手動解壓**：playbook 的 `models` 步驟會判斷 tar 或目錄、匯入 PV，並檢查每個模型 manifest 引用的 blob 是否齊全、大小是否一致。
 
 ```bash
-# 在 controller01
-tar xzf ollama-models.tgz -C /var/lib/ai/ollama       # 對應 PV 的 /root/.ollama
-kubectl -n ai rollout restart deploy/ollama
-kubectl -n ai exec deploy/ollama -- ollama list        # 確認模型已在,無需連網
+ansible-playbook site.yml --tags models          # 只匯入模型
+kubectl -n ai exec deploy/ollama -- ollama list  # 確認模型已在,無需連網
 ```
 
 ### 4.4 換模型 / 未來上 GPU
@@ -308,7 +312,7 @@ spec:
           env:
             - { name: OLLAMA_BASE_URL, value: "http://ollama.ai.svc:11434" }
             - { name: WEBUI_AUTH, value: "true" }          # 開啟多人帳號
-            - { name: ENABLE_SIGNUP, value: "true" }        # 兩階段 bootstrap(§5.2):建完 admin 與使用者後改 "false" 再 rollout restart
+            - { name: ENABLE_SIGNUP, value: "true" }        # 僅示意；實際 playbook 改用 WEBUI_ADMIN_EMAIL/PASSWORD 自動建 admin 並關閉註冊(§5.2)
             - { name: WEBUI_SECRET_KEY, valueFrom: { secretKeyRef: { name: open-webui-secret, key: WEBUI_SECRET_KEY } } }
             # RAG 嵌入走 Ollama + nomic-embed-text(§7.2)
             - { name: RAG_EMBEDDING_ENGINE, value: "ollama" }
@@ -338,30 +342,28 @@ kubectl -n ai get svc open-webui -o jsonpath='{.status.loadBalancer.ingress[0].i
 
 ### 5.2 範例驗證(多人問答可用)
 
-**兩階段 bootstrap**(`ENABLE_SIGNUP=false` 時無法建第一個 admin,故分兩步):
+**首位 admin 由 playbook 自動建立**：Open WebUI 首次啟動(DB 內尚無使用者)時，依環境變數 `WEBUI_ADMIN_EMAIL` / `WEBUI_ADMIN_PASSWORD` 建立管理員，並自動關閉開放註冊(不再有「部署後、首位註冊者搶先成為 admin」的空窗)。密碼預設自動產生、存於 Secret `open-webui-secret`，playbook 結束時會印出取回指令。
 
-1. 以 `ENABLE_SIGNUP=true` 部署,瀏覽器開 `http://<Open-WebUI-VIP>` 註冊 → 第一個帳號即管理員。
-2. 管理員在 **Admin → Users** 建立其餘使用者帳號(多人使用)。
-3. **然後**把 Deployment 的 `ENABLE_SIGNUP` 改 `"false"`、`kubectl -n ai rollout restart deploy/open-webui`。
-4. 對話框選模型 `qwen3.6:35b`,問「你好,請自我介紹」→ 應正常回覆。
+> `ENABLE_SIGNUP` 屬 Open WebUI 的持久化設定：首次啟動後值存進 DB，之後改環境變數不會生效，所以不再用「改 env 再重啟」關註冊。
+
+1. 用 playbook 印出的 admin 帳密登入 `http://<Open-WebUI-VIP>`。
+2. 在 **Admin → Users** 建立其餘使用者帳號(多人使用)。
+3. 對話框選模型 `qwen3.6:35b`,問「你好,請自我介紹」→ 應正常回覆。
 
 **驗證通過標準**:多個帳號可各自登入、各自對話、切換模型;對話歷史持久(重啟 pod 後仍在,證明 PV 生效)。
 
 ### 5.3 接上 Elasticsearch MCP
 
-Open WebUI 是這條主線裡實際的 **MCP client**(§1)。前提是 §6 的 `es-mcp` 已部署、用 `http` 模式、`/ping` 回 200(§6.3)。
+Open WebUI 是這條主線裡實際的 **MCP client**(§1)。playbook 已透過 `TOOL_SERVER_CONNECTIONS` **預先註冊** `es-mcp`(Type: MCP Streamable HTTP、URL `http://es-mcp.ai.svc:8080/mcp`、Auth: None，並授權所有登入使用者唯讀使用)，同時以 `DEFAULT_MODEL_PARAMS` 把 Function Calling 預設為 `Native`。ES 認證在 §6.2 的 MCP container 端用唯讀帳號完成，這段不需再加一層。
 
-1. **Admin Settings → Integrations**(External Tool Servers)→ 新增連線。
-2. **Type** 選 `MCP (Streamable HTTP)`(不是 OpenAPI)。
-3. **Server URL** 填 `http://es-mcp.ai.svc:8080/mcp`。
-4. **Auth** 選 `None`(內網;ES 認證已在 §6.2 的 MCP container 端用唯讀帳號做好,這段不需再加一層)。
-5. 儲存後確認 `list_indices` / `get_mappings` / `search` / `esql` / `get_shards` 五個工具出現。
-6. 模型 `qwen3.6:35b` 的設定裡,把 **Function Calling 設為 `Native`**(Native 模式才會把 Ollama 回的 tool_calls 直接對應到 MCP 工具,而非 prompt-based 間接方式)。
-7. 對話框把 MCP 工具掛到 `qwen3.6:35b` → 問「目前 ES 上有哪些 index?」→ 應觸發 `list_indices` 並回傳實際清單。
+以下 UI 路徑僅供檢查或日後修改(此設定屬「首次啟動寫入 DB」，之後要改需到 UI，改環境變數無效)：
 
-> 步驟 1 與 6 的實際 UI 路徑以 Open WebUI v0.11.0 為準,已於本地 Docker 驗證(§13)實測,見 `LLM_MCP/README.local-test.md`。
+1. **Admin Settings → Integrations**(External Tool Servers)→ 應看到 `Elasticsearch` 連線，工具含 `list_indices` / `get_mappings` / `search` / `esql` / `get_shards`。
+2. 模型設定的 **Function Calling** 應為 `Native`(才會把 Ollama 回的 tool_calls 直接對應到 MCP 工具)。
+3. 對話時在輸入框的 **Tools** 勾選 `Elasticsearch` → 問「目前 ES 上有哪些 index?」→ 應觸發 `list_indices` 並回傳實際清單。
 
-**驗證通過標準**:工具清單能看到 §6.1 的 5 個工具;對話能觸發正確工具呼叫並回傳真實 ES 資料;非管理員帳號能使用已掛好的工具,但不能自己新增/修改 MCP 連線(§10 安全)。
+**驗證通過標準**:`ansible-playbook site.yml --tags verify` 五項全過;對話能觸發正確工具呼叫並回傳真實 ES 資料;非管理員帳號能使用已授權的工具,但不能自己新增/修改 MCP 連線(§10 安全)。
+(這條依賴 Ollama 的 context 夠大:`ollama_context_length` 預設 32768,太小會把工具定義截掉,模型就不會呼叫工具。)
 
 ---
 
@@ -373,7 +375,7 @@ MCP(Model Context Protocol)Server 把 ES/Kibana 的 REST API 暴露成 LLM 能�
 
 典型工具:`list_indices`(列 index)、`get_mappings`(看欄位)、`search`(查詢,支援完整 DSL)、`esql`(ES|QL 查詢)、`get_shards`(shard/topology)。**這些已涵蓋大部分「深度查詢」與「data topology」需求;Geofence 本質是 `search` 帶 geo query,直接涵蓋。**
 
-> `search` 的 `query_body` 參數要求是 **JSON 物件**(不是 JSON 字串)。若 §5.3 step 6 的 Native function calling 把它序列化成字串,es-mcp 會回 `invalid type: string, expected a map`——本地測試(§13)已遇到,設定 Open WebUI 模型參數時留意。
+> `search` 的 `query_body` 參數要求是 **JSON 物件**(不是 JSON 字串)。若 Native function calling 把它序列化成字串,es-mcp 會回 `invalid type: string, expected a map`——實測曾遇到,設定 Open WebUI 模型參數時留意。
 
 ### 6.2 部署(以容器化 MCP + 唯讀帳號)
 
@@ -446,13 +448,17 @@ kubectl apply -f es-mcp.yaml
 
 ### 6.3 範例驗證(MCP 工具可用)
 
-容器內無 shell/curl,健康檢查從 pod 外做:
+es-mcp 容器內沒有 shell/curl，所以由 playbook 的 `verify` 步驟從 open-webui pod 內(映像有 curl/jq)打 `/ping` 與 `/mcp`(streamable-HTTP，非根路徑)的 initialize、tools/list、`list_indices`，路徑與實際運作相同：
+
+```bash
+ansible-playbook site.yml --tags verify
+```
+
+手動檢查也可以：
 
 ```bash
 kubectl -n ai port-forward deploy/es-mcp 8080:8080 &
 curl -s http://localhost:8080/ping          # 期望 HTTP 200 + "Ready"
-# MCP 端點在 /mcp(streamable-HTTP,非根路徑);最終以 §5.3 Open WebUI 能列出 5 個工具為準
-# 本地驗證另有腳本:LLM_MCP/mcp-smoke.sh(打 /ping 與 /mcp 的 initialize + tools/list,斷言 5 工具)
 ```
 
 **驗證通過標準**:透過 Open WebUI 呼叫 `list_indices` 能回傳 ES 上實際的 index 清單;呼叫 `search` / `esql` 能回傳真實查詢結果。這代表 LLM ↔ MCP ↔ ES 的鏈路打通。
@@ -524,7 +530,7 @@ index 一多,全部 .md 塞進 prompt 會爆 context 且稀釋注意力。用 RA
 
 **重要後果**:知識庫的向量索引存在 Open WebUI 自己的資料卷(`/app/backend/data` 的內建向量庫),**不在 ES**。因此:
 
-- §2.6 已把 index `.md` 列為帶入項;
+- §2.5 已把 index `.md` 列為帶入項;
 - air-gap 帶入後需在目標環境**重新上傳 / 重新嵌入**(或整個 `openwebui-data` PV 一起搬),不能只靠 ES 快照。
 
 ### 7.3 動態 mapping(MCP 工具)+ 靜態語意(.md)結合
@@ -570,7 +576,7 @@ LLM 產生的 DSL 可能語法錯或查空。流程加一層:
 
 ## 9. 各項 ECK 任務(每項含範例驗證)
 
-不只查詢——以下每項任務給「怎麼實現 + 範例 + 驗證通過標準」。任務皆走 §7 的正確性方法(語意說明 + few-shot + 自我修正)。§9.1~9.3、9.5 於本地 Docker 端到端驗證(§13)已先跑過機制面。
+不只查詢——以下每項任務給「怎麼實現 + 範例 + 驗證通過標準」。任務皆走 §7 的正確性方法(語意說明 + few-shot + 自我修正)。各項任務的機制面請依 §13 的 `verify` 先確認鏈路打通。
 
 ### 9.1 深度查詢(聚合/多條件)
 
@@ -626,13 +632,13 @@ LLM 產生的 DSL 可能語法錯或查空。流程加一層:
 ## 11. 部署順序總覽
 
 ```
-0.  (建議)先在有 Docker 的機器跑 LLM_MCP/docker-compose.local-test.yml 做端到端功能驗證(§13)
 先期(有網路):§2 下載所有映像 + 模型 blob → 推內部 registry / 打包 tar
+(以上 1–4 步由 `ansible-playbook site.yml` 一次完成，詳見 README)
 ────────────────── 移入 air-gapped ──────────────────
 1. §3  建 ai namespace、controller 貼 label、建本地 PV(ollama 60Gi / openwebui 10Gi)、mkdir 目錄
 2. §4  部署 Ollama → §4.3 匯入模型 blob → 驗證 ollama run + tool_calls 格式(§4.2)
 3. §6  ES 建唯讀帳號 mcp_user → 部署 es-mcp(args: ["http"])→ §6.3 驗證 /ping 回 200 + es-mcp 能連 ES(list_indices)
-4. §5  部署 Open WebUI(先建 WEBUI_SECRET_KEY Secret;ENABLE_SIGNUP=true)→ 建管理員/使用者 → 改 ENABLE_SIGNUP=false rollout → §5.3 接上 MCP → 驗證多人問答 + 工具呼叫
+4. §5  部署 Open WebUI(admin 與 es-mcp 連線由環境變數自動建立)→ 建其餘使用者 → 驗證多人問答 + 工具呼叫
 5. §7  撰寫各 index .md 說明(含 few-shot)→ 上傳 Open WebUI 知識庫、設 nomic-embed-text 嵌入(§7.2);目標環境需重新嵌入
 6. §9  逐項任務驗證(查詢 / Geofence / topology / 分析)
 7. §10 落實唯讀權限、逾時、稽核
@@ -651,29 +657,14 @@ LLM 產生的 DSL 可能語法錯或查空。流程加一層:
 
 ---
 
-## 13. 本地 Docker 端到端驗證(上線前)
+## 13. 端到端驗證(上線前)
 
-正式 k8s 尚未就緒前,先用單機 Docker 驗證「Open WebUI → Ollama(tool_calls)→ es-mcp → ES」整條鏈路與各項功能。
+以 playbook 的 `verify` 步驟(`ansible-playbook site.yml --tags verify`)驗證「Open WebUI → Ollama(tool_calls)→ es-mcp → ES」整條鏈路：
 
-- **位置**:`LLM_MCP/docker-compose.local-test.yml` + `LLM_MCP/README.local-test.md`(依序步驟與驗證矩陣)。
-- **組成**:ES 9.4.2 + Kibana 9.4.2 + Ollama(跑小模型 `qwen3.5:4b`)+ es-mcp 0.4.6(`http`)+ Open WebUI v0.11.0 + `nomic-embed-text`(RAG)。
-- **與正式環境的刻意差異**:單機、明文 http(無 ECK 自簽 TLS)、`qwen3.5:4b` 取代 `qwen3.6:35b`、單節點 ES、無 MetalLB / 排程。
-- **驗證涵蓋**:§4.2 tool_calls 格式、§5.2 多人 + 持久化、§5.3 MCP 工具清單、§6.3 `/ping`+`/mcp`、§7.2 Open WebUI 知識庫 RAG、§9.1 深度查詢、§9.2 Geofence、§9.3 `get_shards`。
-- **不涵蓋**(需正式環境或後續):§9.4 Kibana 寫入、`qwen3.6:35b` 實際延遲 / 正確率、單節點下真實 topology 傾斜、ECK 自簽 TLS 路徑。
-- **通過標準是「機制正確」**(工具被呼叫、參數合法、ES 回資料、回答有引用所用查詢),**不評估答案品質**——`qwen3.5:4b` 遠弱於 `qwen3.6:35b`。
+- 通過標準是「機制正確」：模型回傳 tool_calls、MCP 工具清單正確、`mcp_user` 帳密與權限正確、Open WebUI 已註冊 es-mcp。
+- 不評估答案品質，也不涵蓋 §9 的功能任務(深度查詢、Geofence、topology、Kibana 寫入)，這些依 §9 手動驗證。
+- 想先在測試叢集(k3s/kind + ECK)試跑時，可把 `ollama_models` 換成小模型(例如 `qwen3.5:4b`)以縮短時間。
 
 ---
 
-## 附錄:版本清冊(可重構依據,填入實際採用版本)
-
-| 元件 | 映像 / 模型 | 版本 tag | 用途 |
-|---|---|---|---|
-| Ollama | ollama/ollama | 0.32.9 | 模型推論 |
-| 主力模型 | qwen3.6:35b | Ollama 官方 tag(Qwen3.6-35B-A3B,MoE 3B 啟動;含 ~0.9GB 視覺 projector) | 深度查詢(function calling) |
-| 備援模型 | qwen3-coder:30b | Ollama 官方 tag(Qwen3-Coder-30B-A3B,MoE ~3B 啟動,以上游 model card 為準) | 工具呼叫穩定性備援 |
-| 測試模型 | qwen3.5:4b | Ollama 官方 tag | **僅**本地 Docker 驗證(§13),不進正式叢集 |
-| 嵌入模型 | nomic-embed-text | latest | RAG 向量化(Open WebUI 知識庫) |
-| 前端 | open-webui/open-webui | v0.11.0 | 多人問答 + MCP client(需 ≥v0.6.31 原生 MCP) |
-| MCP | mcp/elasticsearch | 0.4.6(deprecated,僅收資安更新) | ES 工具(唯讀) |
-
-> 所有版本以實際採用為準,務必固定 tag 並隨規劃書一同版控;離線重建時依此清冊還原。實際下載的映像 digest / checksum 記錄於 `LLM_MCP/manifests/VERSIONS.md`。
+> 所有版本以實際採用為準,務必固定 tag 並隨規劃書一同版控;離線重建時依此清冊還原。實際下載的映像 digest / checksum 請一併記錄。

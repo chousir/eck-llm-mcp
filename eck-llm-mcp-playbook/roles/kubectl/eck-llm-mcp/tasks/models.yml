@@ -1,0 +1,154 @@
+---
+# 模型匯入：ollama_models_src（tar 或目錄）→ {{ ollama_models_dir }}
+# PV 掛在容器 /root/.ollama，所以模型要落在 PV 的 models/ 底下（blobs/ + manifests/）。
+# 只有 PV 上缺任一模型 manifest 時才讀取來源；最後逐一檢查每個模型引用的 blob 是否存在且大小正確。
+
+- name: 確保模型目錄存在
+  file:
+    path: "{{ ollama_models_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: 檢查 PV 上各模型的 manifest
+  stat:
+    path: "{{ ollama_models_dir }}/manifests/registry.ollama.ai/library/{{ item.name }}/{{ item.tag }}"
+    get_checksum: false
+  register: dest_manifests
+  loop: "{{ ollama_models }}"
+  loop_control:
+    label: "{{ item.name }}:{{ item.tag }}"
+
+- name: 匯入模型（PV 上缺模型時）
+  when: dest_manifests.results | rejectattr('stat.exists') | list | length > 0
+  block:
+    - name: 檢查模型來源 {{ ollama_models_src }}
+      stat:
+        path: "{{ ollama_models_src }}"
+        get_checksum: false
+      register: models_src_stat
+
+    - name: 找不到模型來源就中止
+      fail:
+        msg: |
+          PV 上缺少模型：{{ dest_manifests.results | rejectattr('stat.exists') | map(attribute='item.name') | join(', ') }}
+          而且目標主機上找不到模型來源 ollama_models_src={{ ollama_models_src }}。
+          請依 README「離線準備」把 ollama-models.tar（或已解開的目錄）放到目標主機，並設定 ollama_models_src。
+      when: not models_src_stat.stat.exists
+
+    # ---- 來源是目錄 ----
+    - name: 判斷目錄結構（blobs/ 直接在底下，或多一層 models/）
+      stat:
+        path: "{{ ollama_models_src }}/models/manifests"
+        get_checksum: false
+      register: models_src_nested
+      when: models_src_stat.stat.isdir
+
+    - name: 從目錄複製模型到 PV（有 rsync 用 rsync，否則 cp -a）
+      shell: |
+        set -e
+        src="{{ ollama_models_src }}{{ '/models' if models_src_nested.stat.exists else '' }}"
+        test -d "$src/manifests" || { echo "$src 底下沒有 manifests/ 目錄" >&2; exit 1; }
+        if command -v rsync >/dev/null 2>&1; then
+          rsync -a "$src/" "{{ ollama_models_dir }}/"
+        else
+          cp -a "$src/." "{{ ollama_models_dir }}/"
+        fi
+      when: models_src_stat.stat.isdir
+
+    # ---- 來源是 tar ----
+    - name: 讀取 tar 內容以判斷目錄層級
+      shell: tar -tf "{{ ollama_models_src }}" | grep -m1 -E '(^|/)(blobs|manifests)(/|$)'  # noqa: risky-shell-pipe
+      register: models_tar_first
+      changed_when: false
+      failed_when: models_tar_first.stdout | length == 0
+      when: not models_src_stat.stat.isdir
+
+    - name: 解開 tar 到 PV（自動去掉 blobs/、manifests/ 之前的目錄層級）
+      vars:
+        tar_prefix: "{{ models_tar_first.stdout | regex_replace('^(.*?)(blobs|manifests)(/.*)?$', '\\1') }}"
+      command: >-
+        tar -xf {{ ollama_models_src }} -C {{ ollama_models_dir }} --no-same-owner
+        --strip-components={{ tar_prefix.split('/') | reject('equalto', '') | list | length }}
+      when: not models_src_stat.stat.isdir
+
+    - name: 模型檔案 owner 設為 root（容器內 Ollama 以 root 執行）
+      file:
+        path: "{{ ollama_models_dir }}"
+        state: directory
+        recurse: true
+        owner: root
+        group: root
+
+- name: 再次檢查所有模型 manifest
+  stat:
+    path: "{{ ollama_models_dir }}/manifests/registry.ollama.ai/library/{{ item.name }}/{{ item.tag }}"
+    get_checksum: false
+  register: dest_manifests_after
+  loop: "{{ ollama_models }}"
+  loop_control:
+    label: "{{ item.name }}:{{ item.tag }}"
+
+- name: 列出 PV 上實際有的模型（僅在仍有缺漏時）
+  find:
+    paths: "{{ ollama_models_dir }}/manifests"
+    recurse: true
+    file_type: file
+  register: dest_manifest_files
+  when: dest_manifests_after.results | rejectattr('stat.exists') | list | length > 0
+
+- name: 模型仍有缺漏就中止
+  fail:
+    msg: |
+      模型來源裡沒有：{% for r in dest_manifests_after.results | rejectattr('stat.exists') %}{{ r.item.name }}:{{ r.item.tag }} {% endfor %}
+
+      PV 上現有的 manifest：
+      {% for f in dest_manifest_files.files | default([]) %}
+        {{ f.path | regex_replace('^.*/manifests/', '') }}
+      {% endfor %}
+      請確認在連網機 pull 的模型名稱/tag 與 ollama_models 一致。
+  when: dest_manifests_after.results | rejectattr('stat.exists') | list | length > 0
+
+# ---- blob 完整性：manifest 引用的每個 blob 都要存在且大小一致（抓搬運不完整）----
+- name: 讀取模型 manifest
+  slurp:
+    src: "{{ ollama_models_dir }}/manifests/registry.ollama.ai/library/{{ item.name }}/{{ item.tag }}"
+  register: model_manifest_files
+  loop: "{{ ollama_models }}"
+  loop_control:
+    label: "{{ item.name }}:{{ item.tag }}"
+
+- name: 整理 blob 清單
+  vars:
+    manifests: "{{ model_manifest_files.results | map(attribute='content') | map('b64decode') | map('from_json') | list }}"
+  set_fact:
+    model_blobs: "{{ (manifests | map(attribute='layers') | flatten) + (manifests | map(attribute='config') | list) }}"
+
+- name: 檢查 blob
+  stat:
+    path: "{{ ollama_models_dir }}/blobs/{{ item.digest | replace(':', '-') }}"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: model_blob_stats
+  loop: "{{ model_blobs }}"
+  loop_control:
+    label: "{{ item.digest[:19] }}…"
+
+- name: blob 缺漏或大小不符就中止
+  fail:
+    msg: |
+      下列 blob 缺漏或大小與 manifest 不符（搬運不完整）：
+      {% for r in model_blob_stats.results %}
+      {% if not r.stat.exists %}
+        缺少   {{ r.item.digest }}
+      {% elif r.stat.size != r.item.size %}
+        大小錯 {{ r.item.digest }}（實際 {{ r.stat.size }}，應為 {{ r.item.size }}）
+      {% endif %}
+      {% endfor %}
+      請重新從連網機帶入模型（並比對 sha256sum），刪除上列檔案後重跑。
+  when: >-
+    model_blob_stats.results | rejectattr('stat.exists') | list | length > 0
+    or (model_blob_stats.results | selectattr('stat.exists')
+        | map(attribute='stat.size') | list)
+       != (model_blob_stats.results | selectattr('stat.exists')
+        | map(attribute='item.size') | list)

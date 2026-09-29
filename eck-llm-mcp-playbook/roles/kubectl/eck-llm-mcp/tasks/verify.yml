@@ -1,0 +1,25 @@
+---
+# 全部在 open-webui pod 內執行（映像內有 curl / jq / sh），見 templates/smoke.sh.j2。
+- name: 等待 open-webui 就緒
+  command: "{{ kubectl_cmd }} -n {{ ai_namespace }} rollout status deploy/open-webui --timeout={{ rollout_timeout }}"
+  changed_when: false
+
+- name: 執行連線驗證
+  command: "{{ kubectl_cmd }} -n {{ ai_namespace }} exec -i deploy/open-webui -- sh -s"
+  args:
+    stdin: "{{ lookup('template', 'smoke.sh.j2') }}"
+  register: smoke
+  changed_when: false
+  failed_when: false
+  async: "{{ verify_tool_calls_timeout | int + 300 }}"
+  poll: 5
+
+- name: 驗證結果
+  debug:
+    msg: "{{ (smoke.stdout | default('')).split('\n') + (smoke.stderr | default('')).split('\n') }}"
+
+- name: 驗證有失敗就中止
+  assert:
+    that: smoke.rc | default(1) == 0
+    quiet: true
+    fail_msg: 連線驗證有項目失敗，請看上方輸出（[FAIL] 行）。

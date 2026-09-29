@@ -3,142 +3,165 @@
 在既有 ECK（Elastic on Kubernetes）叢集上，額外部署一層「自然語言深度查詢」能力：
 **Ollama（LLM 推論）+ Elasticsearch MCP Server（把 ES 包成工具）+ Open WebUI（多人前端 / MCP client）**。
 
-- 架構與設計理由：[`ECK深度查詢擴充規劃書_LLM_MCP.md`](./ECK深度查詢擴充規劃書_LLM_MCP.md)（本 README 對應其中 §3–§6）
-- 實際部署工具：本 repo 的 [`eck-llm-mcp-playbook/`](./eck-llm-mcp-playbook) — 一支 Ansible playbook
+- 架構與設計理由：[`ECK深度查詢擴充規劃書_LLM_MCP.md`](./ECK深度查詢擴充規劃書_LLM_MCP.md)
+- 部署工具：[`eck-llm-mcp-playbook/`](./eck-llm-mcp-playbook)，一支 Ansible playbook
 
-目標環境是 **air-gapped（離線）**：本 playbook 只負責「把已經備妥的映像/模型組成叢集資源」，
-不處理映像 pull/push、模型下載——這些必須在有網路的環境先做好，帶進來之後才跑本 playbook。
+**目標：在 air-gapped 環境裝好 ECK 後，只跑一次 `ansible-playbook site.yml`，就得到已接通的
+「Open WebUI ↔ Ollama ↔ es-mcp ↔ Elasticsearch」，並自動驗證。** 下面指令都假設已 `cd eck-llm-mcp-playbook`。
 
-下面所有指令都假設你已經 `cd eck-llm-mcp-playbook`。
-
----
-
-## 目錄結構
-
-```
-eck-llm-mcp-playbook/
-├── ansible.cfg
-├── inventory/
-│   ├── hosts                  # ← 要改的連線資訊
-│   └── group_vars/all.yml
-├── roles/kubectl/eck-llm-mcp/
-│   ├── defaults/main.yml      # ← 所有可調變數都在這
-│   ├── tasks/                 # 依序：node_prep → prereqs → model_staging
-│   │                          #        → secrets → es_security → 三個 Deployment → webui_info
-│   ├── handlers/main.yml
-│   └── templates/             # 4 份 k8s manifest（namespace/PV、ollama、es-mcp、open-webui）
-└── site.yml
-```
+playbook 只負責「把備妥的映像 / 模型組成叢集資源」，不做映像 pull/push 與模型下載——
+那些要先在有網路的機器做好（見〈離線準備〉）。
 
 ---
 
-## Air-gap 前置作業（跑 playbook 之前，在「有網路」的環境先做）
+## 1. 環境需求
 
-以下項目**不在本 playbook 範圍**，需要你自己完成、帶進離線環境：
-
-1. **三個容器映像**已 `pull` 並 retag 推入內部 registry，且與 `defaults/main.yml` 的
-   `ollama_image` / `open_webui_image` / `es_mcp_image` **完全一致**（路徑、tag 都要對上，
-   否則 apply 後會 `ImagePullBackOff`）：
-   - `ollama/ollama:0.32.9`
-   - `open-webui/open-webui:v0.11.0`
-   - `mcp/elasticsearch:0.4.6`（官方 image 是 `docker.elastic.co/mcp/elasticsearch`）
-2. **模型 blob** 已用 Ollama 在連網環境 `ollama pull` 後打包，並放到目標主機
-   `LLM_MCP/models/.ollama_staging/`（目錄底下要直接是 `blobs/` 與 `manifests/` 兩個資料夾，
-   這就是 Ollama 的 `~/.ollama/models` 內容本身，不要外面再包一層）：
-   - `nomic-embed-text:latest`
-   - 主力模型（預設 `qwen3.6:35b`，實際 tag 對到 `defaults/main.yml` 的
-     `ollama_primary_model_name` / `ollama_primary_model_tag`）
-3. 若內部 registry 是 **HTTP（非 HTTPS）**，目標節點的 containerd/docker 要先設定
-   insecure registry 才拉得動 image——這是叢集層級設定，本 playbook 不處理。
-4. ECK 叢集本身（namespace、ES、Kibana、ES VIP）已依《ECK 部署規劃書》建好，且已知：
-   - elastic 超級使用者的 k8s Secret 名稱與所在 namespace
-   - 可以從 `k8s-controller01` 這台主機連到的 ES VIP / 可解析位址
+| 項目 | 需求 |
+|---|---|
+| Ansible 控制端 | ansible-core ≥ 2.14，不需額外 collection。也可直接在 AI 節點上跑：`inventory/hosts` 設 `ansible_connection=local`。 |
+| 目標主機 | **必須就是 AI 節點**（`ai_node_name` 那台，預設 `k8s-controller01`）：模型與本地 PV 目錄都寫在這台，preflight 會檢查。需要 python3、sudo（root）、kubectl 與可讀的 kubeconfig；磁碟至少 ollama PV 容量（預設 60Gi）+ 模型 tar。 |
+| CPU | Ollama CPU 推論需要 AVX2；記憶體依規劃書（預設 Ollama limit 48Gi）。 |
+| Kubernetes | 目標主機連得到 ClusterIP（kube-proxy）；對外用 MetalLB，沒有的話設 `open_webui_service_type: NodePort`；`ai` namespace 的 Pod Security 不可為 `restricted`（Ollama / Open WebUI 以 root 跑，預設設為 `baseline`）。 |
+| ECK | Elasticsearch 已 Ready 且啟用 security（Basic 授權即可）。 |
+| Registry | 內部 registry 若是 HTTP，需先在各節點 containerd 設 insecure registry（叢集層級設定，不在本 playbook）；需要帳密時建立 docker-registry Secret 並填 `image_pull_secrets`。 |
 
 ---
 
-## 使用方式
+## 2. 離線準備（在有網路的機器）
 
-### 1. 改連線資訊
+### 2.1 映像
 
-`inventory/hosts`：
-
-```ini
-[k8s_controller]
-k8s-controller01 ansible_host=<實際 IP 或 hostname> ansible_user=<實際 SSH 使用者>
-```
-
-### 2. 改必調變數
-
-打開 `roles/kubectl/eck-llm-mcp/defaults/main.yml`，至少確認/修改下方「環境不同一定要調整的變數」章節列出的項目。
-
-### 3. 先跑 syntax check / check mode
+三個映像 retag 後推入內部 registry，路徑與 tag 要和 `ollama_image` / `open_webui_image` / `es_mcp_image` **逐字一致**：
 
 ```bash
-cd eck-llm-mcp-playbook   # 若已在此目錄可略過
-ansible-playbook site.yml --syntax-check
-ansible-playbook site.yml --skip-tags es_security --check --diff
+# 用 --override-arch amd64：在 Apple Silicon / ARM 機器上 pull 會拿到 arm64，目標機會出現 exec format error
+skopeo copy --override-arch amd64 --override-os linux --dest-tls-verify=false \
+  docker://docker.io/ollama/ollama:0.32.9            docker://registry.internal:5000/ollama/ollama:0.32.9
+skopeo copy --override-arch amd64 --override-os linux --dest-tls-verify=false \
+  docker://ghcr.io/open-webui/open-webui:v0.11.0     docker://registry.internal:5000/open-webui/open-webui:v0.11.0
+skopeo copy --override-arch amd64 --override-os linux --dest-tls-verify=false \
+  docker://docker.elastic.co/mcp/elasticsearch:0.4.6 docker://registry.internal:5000/mcp/elasticsearch:0.4.6
 ```
 
-### 4. 正式部署（分兩段跑，避免 ES VIP 還沒填就整段失敗）
+（完全離線、無法直連內部 registry 時，用 `skopeo copy ... docker-archive:xxx.tar` 帶進去再 push。）
+
+### 2.2 模型
+
+用**與正式環境同版本的 Ollama 容器**pull，目錄位置才確定：
 
 ```bash
-# 第一段：namespace/PV、模型匯入、Secret、Ollama、es-mcp、Open WebUI
-ansible-playbook site.yml --skip-tags es_security
-
-# 確認 es_public_url 等 ES 相關變數已填好之後，單獨跑 ES 唯讀帳號建立
-ansible-playbook site.yml --tags es_security
+mkdir -p ollama-data
+docker run -d --name ollama-pull -v $PWD/ollama-data:/root/.ollama ollama/ollama:0.32.9
+docker exec ollama-pull ollama pull qwen3.6:35b
+docker exec ollama-pull ollama pull nomic-embed-text
+docker rm -f ollama-pull
+tar cf ollama-models.tar -C ollama-data models        # blob 已壓縮，不必 gzip
+sha256sum ollama-models.tar > ollama-models.tar.sha256
 ```
 
-`es_security` 這段獨立成 tag，是因為它要打真正的 ES REST API（走 `es_public_url`，通常是
-MetalLB VIP），跟叢集內部部署（走 kubectl）是兩條不同的網路路徑，其中一個沒打通不該卡住另一個。
-
-### 5. 部署後的手動步驟（規劃書 §5.2，不在本 playbook 自動化範圍內）
-
-Open WebUI 目前是 `ENABLE_SIGNUP=true`：
-
-1. 瀏覽器開 `http://<Open WebUI VIP>`（跑完 playbook 會在最後印出來，或用
-   `kubectl -n ai get svc open-webui` 查）→ 註冊 → 第一個帳號即 admin。
-2. Admin → Users 建立其他使用者帳號。
-3. 把 `defaults/main.yml` 的 `webui_enable_signup` 改成 `"false"`，重跑一次
-   `ansible-playbook site.yml --skip-tags es_security`（或手動
-   `kubectl -n ai rollout restart deploy/open-webui`）關閉開放註冊。
-
-### 重跑是安全的
-
-整支 playbook 設計成 idempotent：namespace/PV/Deployment 用 `kubectl apply`（不變時顯示
-`ok`）；模型只在 PV 上偵測不到對應 manifest 時才 rsync；Secret 只在不存在時才產生，已存在則讀回
-原值再拿去建 ES 帳號，密碼不會每次重跑就換掉。可以放心重跑排除設定錯誤。
+帶入離線環境、比對 sha256 後，放到目標主機 `ollama_models_src`（預設 `/opt/eck-llm-mcp/ollama-models.tar`）。
+`ollama_models_src` 也可以是已解開的目錄（底下是 `blobs/` 與 `manifests/`，或多一層 `models/`），playbook 自動判斷。
 
 ---
 
-## 環境不同時，很可能要調整的變數
+## 3. 使用方式
 
-都在 `roles/kubectl/eck-llm-mcp/defaults/main.yml`，可依需要覆寫到
-`inventory/group_vars/all.yml`（優先權更高）而不改 role 本身。
+```bash
+# 1) 改連線資訊：inventory/hosts（ansible_host、ansible_user）
+# 2) 核對參數（第 4 節），寫到 inventory/group_vars/all.yml，不要直接改 role 的 defaults
+# 3) 一次部署（含驗證）
+ansible-playbook site.yml
+```
 
-| 變數 | 預設值 | 什麼情況要改 |
+部署結束會印出 Open WebUI 位址、admin 帳號，以及取回 admin 密碼的指令。
+
+| tag | 內容 |
+|---|---|
+| `prereqs` | 節點標籤、PV 目錄、namespace / PV / PVC |
+| `models` | 匯入 Ollama 模型並檢查 blob 完整性 |
+| `es_security` | 建立 ES 唯讀角色與 `mcp_user` |
+| `deploy` | 全部 k8s 資源（含 prereqs、es_security） |
+| `verify` | 連線驗證：Ollama 模型、tool_calls、es-mcp 工具、`mcp_user` 權限、Open WebUI 已註冊 es-mcp |
+
+`preflight` 與 `secrets` 永遠會跑（`always`），所以任何 tag 組合都可以用。**第一次部署請不要加 `--tags`。**
+
+**重跑是安全的**：資源用 `kubectl apply`；模型只在缺少時才匯入；Secret 先讀後產生，密碼不會因重跑而更換。
+注意 `--check` 對本 role 沒有意義（大量 `command` 在 check mode 會被跳過），請用 `--syntax-check` 與實跑。
+
+### 部署後剩下的手動步驟
+
+1. 用 admin 登入 Open WebUI，**Admin → Users** 建立其他使用者（開放註冊已自動關閉）。
+2. 使用者在對話輸入框的 **Tools** 勾選 `Elasticsearch` 才會使用 MCP 工具。
+3. 知識庫（各 index 的語意說明 `.md`）上傳與嵌入、System Prompt 範本：規劃書 §7.2、§7.5。
+4. 規劃書 §9 各項任務（深度查詢、Geofence、topology…）的功能驗證。
+
+---
+
+## 4. 參數說明
+
+全部在 `roles/kubectl/eck-llm-mcp/defaults/main.yml`（分「必須核對 / 通常要看 / 調校」三區，檔內有註解）。
+覆寫請寫到 `inventory/group_vars/all.yml`（優先權較高）。
+
+### 必須核對
+
+| 變數 | 預設 | 怎麼查正確值 |
 |---|---|---|
-| `kubectl_kubeconfig` | `/etc/kubernetes/admin.conf` | 目標主機的 kubeconfig 不在 kubeadm 預設路徑（例如 k3s 是 `/etc/rancher/k3s/k3s.yaml`、非 root 使用者的 `~/.kube/config`）。**所有 kubectl 呼叫都用 `become: true` 以 root 執行**，路徑錯會直接連不上叢集。 |
-| `ai_node_name` | `k8s-controller01` | 要排到的節點名稱與實際 `kubectl get nodes` 顯示的不同。 |
-| `ollama_pv_path` / `openwebui_pv_path` | `/var/lib/ai/ollama`、`/var/lib/ai/openwebui` | 目標主機該路徑已被佔用，或想放到別顆硬碟/掛載點（例如另外掛的大容量 RAID）。 |
-| `ollama_pv_capacity` / `openwebui_pv_capacity` | `60Gi` / `10Gi` | 模型組合變多（例如再加 `qwen3-coder:30b` 備援）需要更大容量。**注意：PV/PVC 容量在建立後是不可變欄位，容量要改必須先刪掉重建，不能單靠重跑 playbook 生效。** |
-| `llm_mcp_base_dir` | `/home/user/eck-llm-mcp/LLM_MCP` | 目標主機上 `LLM_MCP/` 實際擺放的路徑不同。 |
-| `ollama_primary_model_name` / `ollama_primary_model_tag` | `qwen3.6` / `35b` | 换主力模型或量化版本（例如規劃書提到工具呼叫不穩時切 `qwen3-coder:30b`）——這是唯一為此目的特別拉出來的變數，改這裡就好，不用動 task 邏輯。 |
-| `ollama_embed_model_name` / `ollama_embed_model_tag` | `nomic-embed-text` / `latest` | 換嵌入模型。 |
-| `ollama_image` / `open_webui_image` / `es_mcp_image` | `registry.internal:5000/...` | 內部 registry 位址、命名空間或實際 retag 路徑跟預設不同——**這是最容易被忽略、也最容易直接導致 ImagePullBackOff 的一組變數**，務必對照你實際 push 上去的結果逐一核對。 |
-| `ollama_resources_*` / `open_webui_resources_*` / `es_mcp_resources_*` | 依規劃書 §4.1/§5.1/§6.2 估算值 | controller 記憶體/CPU 規格跟規劃書預設的 256GB 不同，或量測後發現實際佔用跟估算差很多（`ollama ps` 校正）。 |
-| `ollama_keep_alive` / `ollama_num_parallel` | `24h` / `2` | 想讓模型用完就卸載（改小 `OLLAMA_KEEP_ALIVE`），或要調整同時併發的請求數（會連動 KV cache 記憶體用量）。 |
-| `webui_enable_signup` | `"true"` | 完成 §5.2 兩階段 bootstrap、建完所有使用者帳號後，改成 `"false"` 關閉開放註冊。 |
-| `open_webui_service_type` | `LoadBalancer` | 叢集沒有 MetalLB / 沒有可用的 LB IP pool，需改成 `NodePort` 或 `ClusterIP` + 自行處理對外存取。 |
-| `es_mcp_es_url` | `https://prod-es-http.elastic-stack.svc:9200` | 這是 **叢集內部**（pod 網路）DNS，ECK 的 Elasticsearch 資源名稱、Service 名稱或 namespace 跟規劃書預設不同時要改。 |
-| `es_admin_secret_name` / `es_admin_secret_namespace` / `es_admin_secret_key` | `prod-es-elastic-user` / `elastic-stack` / `elastic` | **目前是推測值**，需對照實際 ECK 部署核對（ECK 預設命名規則是 `<Elasticsearch 資源名>-es-elastic-user`）。 |
-| `es_public_url` | `https://CHANGEME-es-vip:9200`（佔位值，必改） | 這是 `k8s-controller01` **主機本身**（非 pod 網路）用來打 ES REST API 建立唯讀帳號的位址，通常是 ES 的 MetalLB LoadBalancer VIP。沒改就跑 `--tags es_security` 一定會在 preflight 失敗（訊息會提示你）。 |
-| `mcp_role_name` / `mcp_user_name` | `mcp_readonly` / `mcp_user` | ES 上已有同名角色/帳號、想沿用別的命名慣例時才需要改。 |
+| `ollama_image` `open_webui_image` `es_mcp_image` | `registry.internal:5000/...` | 對照你實際 push 的結果；`curl -s http://<registry>/v2/_catalog`。不一致會 `ImagePullBackOff`。 |
+| `ollama_models_src` | `/opt/eck-llm-mcp/ollama-models.tar` | 目標主機上 tar 或目錄的實際路徑。 |
+| `ai_node_name` | `k8s-controller01` | `kubectl get nodes`（NAME 欄）；必須是 ansible 目標主機那台。 |
+
+### 通常要看一下
+
+| 變數 | 預設 | 說明 / 怎麼查 |
+|---|---|---|
+| `kubectl_bin` | `kubectl` | RHEL 系 sudo 的 secure_path 不含 `/usr/local/bin`；`command -v kubectl` 後填絕對路徑。 |
+| `kubectl_kubeconfig` | `/etc/kubernetes/admin.conf` | k3s `/etc/rancher/k3s/k3s.yaml`、rke2 `/etc/rancher/rke2/rke2.yaml`。 |
+| `eck_es_name` `eck_namespace` | 空＝自動偵測 | 叢集內只有一個 Elasticsearch 時自動採用；多個時 preflight 會列出清單。`kubectl get elasticsearch -A`。 |
+| `es_mcp_es_url` `es_api_url` `es_admin_secret_name` | 空＝依 ECK 命名慣例推導 | 推導：`<name>-es-http.<ns>.svc:9200`、`<name>-es-http` 的 ClusterIP、`<name>-es-elastic-user`。ClusterIP 從主機不可達時，把 `es_api_url` 設成 ES 的 LB VIP / NodePort。 |
+| `open_webui_service_type` | `LoadBalancer` | 沒有 MetalLB 改 `NodePort`；指定 VIP 用 `open_webui_service_annotations`，例如 `{metallb.universe.tf/loadBalancerIPs: "10.0.0.50"}`。 |
+| `webui_admin_email` `webui_admin_password` | `admin@example.local`、空＝自動產生 | 只在 Open WebUI「第一次啟動、尚無使用者」時生效，之後請在 UI 改密碼。 |
+| `image_pull_secrets` | `[]` | registry 需帳密（Harbor 等）：在 `ai` namespace 先建 docker-registry Secret，填名稱。 |
+| `ai_tolerations` | control-plane 與 master 都容忍 | AI 節點若有其他 taint：`kubectl describe node <node> \| grep Taints`。 |
+| `ollama_pv_path` `openwebui_pv_path` `ollama_pv_capacity` `openwebui_pv_capacity` | `/var/lib/ai/...`、`60Gi`、`10Gi` | **PV/PVC 容量建立後不可變更，要改須先刪除重建。** |
+| `ollama_models` | qwen3.6:35b + nomic-embed-text | 第一個是主力模型。啟用備援 `qwen3-coder:30b` 時取消註解，並視情況把 `ollama_max_loaded_models` 調 3、加大記憶體 limit。 |
+| `mcp_index_patterns` | `["*"]` | 建議收斂成實際要查的 pattern，例如 `["netflow-*"]`。es-mcp 的 `/mcp` 無認證，這是主要的權限邊界。 |
+| `enable_network_policy` | `false` | `true` 時只允許 open-webui 連 es-mcp / ollama（CNI 需支援 NetworkPolicy）。 |
+
+### 調校
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `ollama_context_length` | `32768` | 太小會把 system prompt / 工具定義截掉，模型就不呼叫工具；調大會增加 KV cache 記憶體（× `ollama_num_parallel`）。 |
+| `ollama_num_parallel` `ollama_max_loaded_models` `ollama_keep_alive` | `2` `2` `24h` | 併發與常駐模型數。 |
+| `*_resources_*` | 依規劃書估算 | 用 `kubectl -n ai exec deploy/ollama -- ollama ps` 量測後校正。不建議對 Ollama 設 CPU limit（被限流會極慢）。 |
+| `verify_tool_calls` `verify_tool_calls_timeout` | `true`、`900` | CPU 首次載入 35B 需數分鐘；不想等可設 `false`。 |
+| `rollout_timeout` | `600s` | 各 Deployment 等待就緒的上限；逾時會印出 pod events 與 log。 |
 
 ---
 
-## 已知限制 / 不在本 playbook 範圍
+## 5. 取捨與已知限制
 
-- Open WebUI 首位 admin 帳號建立、其餘使用者帳號建立、知識庫（index `.md`）上傳與嵌入——維持規劃書 §5.2 / §7.2 的手動步驟。
-- 規劃書 §9 各項任務的功能驗證（深度查詢、Geofence、topology 等）不會被本 playbook 自動測試，需依規劃書手動驗證。
-- PV/PVC 容量調整、image insecure-registry 設定屬叢集/節點層級設定，不在本 playbook 處理範圍。
+- es-mcp 的 `/mcp` 沒有認證；`ES_SSL_SKIP_VERIFY=true`（ECK 自簽憑證）；Open WebUI 走 HTTP:80。內網可接受，但請用 `mcp_index_patterns` 收斂權限，必要時開 `enable_network_policy`。
+- `TOOL_SERVER_CONNECTIONS`、admin 帳號都是「首次啟動寫入 Open WebUI DB」：之後若要改 MCP 連線，到 Admin → Settings → Integrations 改，或清空 `openwebui` PV 後重跑。
+- Open WebUI 知識庫索引存在 `openwebui-data` 卷，不在 ES；搬到新環境要重新上傳嵌入。
+- 本 playbook 不處理：映像 / 模型下載、insecure-registry 設定、PV 容量調整、規劃書 §9 的功能任務驗證。
+
+---
+
+## 6. 疑難排解
+
+| 症狀 | 原因 / 處理 |
+|---|---|
+| preflight：`無法以 root 執行 kubectl` | 設 `kubectl_bin` 絕對路徑、確認 `kubectl_kubeconfig`。 |
+| preflight：`找不到節點` / `目標主機必須就是節點` | `ai_node_name` 對照 `kubectl get nodes`；inventory 的 `ansible_host` 必須是該節點。 |
+| preflight：`必須恰好對到一個 Elasticsearch` | 設 `eck_es_name` 與 `eck_namespace`。 |
+| rollout 逾時，events 顯示 `ImagePullBackOff` | 映像路徑 / tag 與 registry 不一致、insecure registry 未設、需 `image_pull_secrets`。`exec format error` = 映像架構不對（用 `--override-arch amd64`）。 |
+| Pod `Pending` | `kubectl -n ai describe pod`：node label / taint（`ai_tolerations`）、記憶體不足、PVC 未 Bound。 |
+| `PVC 未全部 Bound` | PV 容量與 PVC 不一致（不可變，須刪除重建）。刪過 `ai` namespace 的舊 PV 會自動解除綁定。 |
+| `blob 缺漏或大小不符` | 模型搬運不完整，重新帶入並比對 sha256。 |
+| ES 連不到（es_security） | 目標主機打不到 ClusterIP：設 `es_api_url`（LB VIP / NodePort）。 |
+| 模型不呼叫工具 | `ollama_context_length` 太小；Function Calling 需為 `Native`；`verify` 第 2 項可確認模型本身的 tool_calls。 |
+| `invalid type: string, expected a map` | Native function calling 把 `query_body` 序列化成字串（見規劃書 §6）；換 prompt 或模型參數。 |
+| `list_indices` 403 | `mcp_readonly` 角色需含 `monitor` 權限；確認 `mcp_index_patterns` 涵蓋要查的 index。 |
+| 一般使用者看不到 Elasticsearch 工具 | 對話輸入框要勾選 Tools；若 Open WebUI DB 內已有舊連線設定，env 不會覆蓋（見第 5 節）。 |
+| Open WebUI 下拉選單很慢 | 離線時等 OpenAI 逾時；本 playbook 已設 `ENABLE_OPENAI_API=false`、`OFFLINE_MODE=true`。 |

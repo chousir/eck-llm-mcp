@@ -12,21 +12,29 @@ spec:
     metadata:
       labels:
         app: es-mcp
+      annotations:
+        # 密碼變動時 pod template 改變 -> 自動 rollout（env secretKeyRef 不會被監看）
+        checksum/es-mcp-cred: "{{ mcp_user_password | hash('sha256') }}"
     spec:
       tolerations:
-        - key: node-role.kubernetes.io/control-plane
-          effect: NoSchedule
+{{ ai_tolerations | to_nice_yaml | trim | indent(8, true) }}
       nodeSelector:
         {{ ai_node_label_key }}: "{{ ai_node_label_value }}"
+{% if image_pull_secrets | length > 0 %}
+      imagePullSecrets:
+{% for s in image_pull_secrets %}
+        - name: {{ s }}
+{% endfor %}
+{% endif %}
       containers:
         - name: es-mcp
           image: {{ es_mcp_image }}
           args: ["http"]
           env:
             - name: ES_URL
-              value: "{{ es_mcp_es_url }}"
+              value: "{{ es_resolved_mcp_url }}"
             - name: ES_USERNAME
-              value: "{{ es_mcp_es_username }}"
+              value: "{{ mcp_user_name }}"
             - name: ES_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -38,6 +46,12 @@ spec:
               value: "0.0.0.0:{{ es_mcp_service_port }}"
           ports:
             - containerPort: {{ es_mcp_service_port }}
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: {{ es_mcp_service_port }}
+            periodSeconds: 5
+            failureThreshold: 12
           resources:
             requests:
               memory: "{{ es_mcp_resources_requests_memory }}"

@@ -3,10 +3,8 @@
 
 - name: 貼 {{ ai_node_label_key }} 標籤到節點 {{ ai_node_name }}
   command: >
-    kubectl label node {{ ai_node_name }}
+    {{ kubectl_cmd }} label node {{ ai_node_name }}
     {{ ai_node_label_key }}={{ ai_node_label_value }} --overwrite
-  environment:
-    KUBECONFIG: "{{ kubectl_kubeconfig }}"
   register: label_result
   changed_when: "'not labeled' not in label_result.stdout"
 

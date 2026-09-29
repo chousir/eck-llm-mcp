@@ -1,6 +1,6 @@
 ---
 # 泛用步驟：render 一份 k8s manifest 樣板 -> kubectl apply -> (可選) 等待 rollout。
-# 由 tasks/main.yml 用 import_tasks/include_tasks 呼叫，透過變數 `manifest` 傳入：
+# 由 tasks/main.yml 用 include_tasks 呼叫，透過變數 `manifest` 傳入：
 #   manifest.name        manifest 檔名（不含副檔名），也是 rendered 檔案名稱
 #   manifest.template    templates/ 內的樣板檔名
 #   manifest.deployment  (選填) 要等待 rollout 完成的 Deployment 名稱
@@ -12,15 +12,33 @@
     mode: "0644"
 
 - name: "kubectl apply {{ manifest.name }}.yaml"
-  command: kubectl apply -f {{ manifest_dir }}/{{ manifest.name }}.yaml
-  environment:
-    KUBECONFIG: "{{ kubectl_kubeconfig }}"
+  command: "{{ kubectl_cmd }} apply -f {{ manifest_dir }}/{{ manifest.name }}.yaml"
   register: manifest_apply
   changed_when: manifest_apply.stdout is search('(created|configured)')
 
 - name: "等待 {{ manifest.deployment | default('deployment') }} rollout 完成"
-  command: kubectl -n {{ ai_namespace }} rollout status deploy/{{ manifest.deployment }} --timeout=300s
-  environment:
-    KUBECONFIG: "{{ kubectl_kubeconfig }}"
-  changed_when: false
   when: manifest.deployment is defined
+  block:
+    - name: "kubectl rollout status deploy/{{ manifest.deployment }}"
+      command: >-
+        {{ kubectl_cmd }} -n {{ ai_namespace }} rollout status
+        deploy/{{ manifest.deployment }} --timeout={{ rollout_timeout }}
+      changed_when: false
+  rescue:
+    # 離線環境常見失敗（ImagePullBackOff、Pending、CrashLoop）直接在這裡看到原因
+    - name: "收集 {{ manifest.deployment }} 診斷資訊"
+      shell: |
+        {{ kubectl_cmd }} -n {{ ai_namespace }} get pods -l app={{ manifest.deployment }} -o wide
+        echo '--- describe ---'
+        {{ kubectl_cmd }} -n {{ ai_namespace }} describe pods -l app={{ manifest.deployment }} | sed -n '/^Events:/,$p'
+        echo '--- logs ---'
+        {{ kubectl_cmd }} -n {{ ai_namespace }} logs deploy/{{ manifest.deployment }} --tail=30 2>&1 || true
+      register: rollout_diag
+      changed_when: false
+      failed_when: false
+
+    - name: "{{ manifest.deployment }} 未在 {{ rollout_timeout }} 內就緒"
+      fail:
+        msg: |
+          {{ manifest.deployment }} rollout 逾時或失敗。診斷資訊：
+          {{ rollout_diag.stdout | default('') }}

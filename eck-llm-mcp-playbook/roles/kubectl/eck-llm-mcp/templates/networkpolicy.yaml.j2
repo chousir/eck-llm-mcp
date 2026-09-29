@@ -1,0 +1,36 @@
+# 只有 open-webui 能連 es-mcp（無認證的 /mcp）與 ollama。需要 CNI 支援 NetworkPolicy。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: es-mcp-from-open-webui
+  namespace: {{ ai_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: es-mcp
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: open-webui
+      ports:
+        - port: {{ es_mcp_service_port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ollama-from-open-webui
+  namespace: {{ ai_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: ollama
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: open-webui
+      ports:
+        - port: {{ ollama_service_port }}

@@ -2,6 +2,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ ai_namespace }}
+{% if ai_namespace_pod_security | length > 0 %}
+  labels:
+    pod-security.kubernetes.io/enforce: {{ ai_namespace_pod_security }}
+{% endif %}
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -21,7 +25,7 @@ spec:
         - matchExpressions:
             - key: kubernetes.io/hostname
               operator: In
-              values: ["{{ ai_node_name }}"]
+              values: ["{{ ai_node_hostname_label }}"]
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -54,7 +58,7 @@ spec:
         - matchExpressions:
             - key: kubernetes.io/hostname
               operator: In
-              values: ["{{ ai_node_name }}"]
+              values: ["{{ ai_node_hostname_label }}"]
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
