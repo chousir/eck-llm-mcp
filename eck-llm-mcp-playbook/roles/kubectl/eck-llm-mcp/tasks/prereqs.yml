@@ -1,5 +1,5 @@
 ---
-# PV 目錄 + namespace / 本地 PV / PVC
+# PV directories + namespace / local PVs / PVCs
 - name: 建立本地 PV 目錄與 manifest 目錄
   file:
     path: "{{ item }}"
@@ -14,6 +14,6 @@
     mode: "0644"
 
 - name: Apply 00-base.yaml（namespace + PV/PVC）
-  command: "{{ kubectl_cmd }} apply -f {{ manifest_dir }}/00-base.yaml"
+  command: "kubectl apply -f {{ manifest_dir }}/00-base.yaml"
   register: apply_result
   changed_when: apply_result.stdout is search('created|configured')

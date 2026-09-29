@@ -1,13 +1,13 @@
 ---
-# 全部在 open-webui pod 內執行（映像內有 curl / jq / sh），見 templates/smoke.sh.j2。
+# Everything runs inside the open-webui pod (the image ships curl / jq / sh); see templates/smoke.sh.j2.
 - name: 執行連線驗證
-  command: "{{ kubectl_cmd }} -n {{ ai_namespace }} exec -i deploy/open-webui -c open-webui -- sh -s"
+  command: "kubectl -n {{ ai_namespace }} exec -i deploy/open-webui -c open-webui -- sh -s"
   args:
     stdin: "{{ lookup('template', 'smoke.sh.j2') }}"
   register: smoke
   changed_when: false
   failed_when: false
-  async: 1200        # CPU 首次載入 35B 需數分鐘
+  async: 1200        # first load of the 35B model on CPU takes several minutes
   poll: 5
 
 - name: 驗證結果
@@ -21,7 +21,7 @@
     fail_msg: 連線驗證有項目失敗，請看上方輸出（[FAIL] 行）。
 
 - name: 讀取 Open WebUI 位址
-  command: "{{ kubectl_cmd }} -n {{ ai_namespace }} get svc open-webui -o jsonpath={.status.loadBalancer.ingress[0].ip}"
+  command: "kubectl -n {{ ai_namespace }} get svc open-webui -o jsonpath={.status.loadBalancer.ingress[0].ip}"
   register: webui_ip
   changed_when: false
 
@@ -30,5 +30,5 @@
     msg:
       - "Open WebUI : https://{{ webui_ip.stdout }}（憑證由 {{ cert_issuer_name }} 簽發，瀏覽器需信任該 CA）"
       - "admin 帳號 : admin@example.com"
-      - "admin 密碼 : {{ kubectl_cmd }} -n {{ ai_namespace }} get secret open-webui-secret -o jsonpath={.data.WEBUI_ADMIN_PASSWORD} | base64 -d"
+      - "admin 密碼 : kubectl -n {{ ai_namespace }} get secret open-webui-secret -o jsonpath={.data.WEBUI_ADMIN_PASSWORD} | base64 -d"
       - "開放註冊已自動關閉；其他使用者請到 Admin -> Users 建立。對話時需在輸入框 Tools 勾選 Elasticsearch。"

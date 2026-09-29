@@ -1,8 +1,23 @@
 ---
-# 全域連線設定；跨 role 共用的變數。
-# 這支 playbook 目前只有一個 role（kubectl/eck-llm-mcp），
-# 該 role 專屬的變數（image、容量、模型 tag、ES 位址...）都在
-# roles/kubectl/eck-llm-mcp/defaults/main.yml，需要覆寫時優先改那邊，
-# 或在此檔加同名變數覆寫（group_vars 優先權高於 role defaults）。
+# Environment-specific values live here (higher precedence than role defaults); other tunables and internal constants are in
+# roles/kubectl/eck-llm-mcp/defaults/main.yml.
+# Note: the inventory host name (k8s-controller01 in hosts.yaml) must equal the k8s node name
+# (the NAME column of kubectl get nodes): templates use it for nodeSelector and the local PV node affinity.
 
 ansible_python_interpreter: auto_silent
+
+# Model tar (ollama-models.tar produced by package/pull.sh); only read when models are missing on the PV.
+ollama_models_src: /opt/eck-llm-mcp/ollama-models.tar
+# name:tag; the first one is the primary model (default model, target of the tool_calls check); must match package/models.list
+# add the fallback qwen3-coder:30b only if it was packaged
+ollama_models:
+  - qwen3.6:35b
+  - nomic-embed-text:latest
+
+# Images: original names, pulled directly by the nodes (no registry prefix)
+ollama_image: ollama/ollama:0.32.9
+open_webui_image: ghcr.io/open-webui/open-webui:v0.11.0
+es_mcp_image: docker.elastic.co/mcp/elasticsearch:0.4.6
+nginx_image: nginx:1.30-alpine
+
+open_webui_vip: ""             # empty = let MetalLB assign; set it to pin the IP

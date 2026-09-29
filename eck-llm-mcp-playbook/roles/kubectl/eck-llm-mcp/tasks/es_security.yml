@@ -1,8 +1,8 @@
 ---
-# 在既有 ECK 的 ES 建唯讀角色 mcp_readonly 與帳號 mcp_user（規劃書 §6.2）。
-# 用 ECK 的 elastic 超級使用者密碼操作；mcp_user 密碼來自 es-mcp-cred（secrets.yml 產生）。
+# Create the read-only role mcp_readonly and user mcp_user in the existing ECK Elasticsearch (planning doc §6.2).
+# Uses the ECK elastic superuser password; the mcp_user password comes from es-mcp-cred (created by secrets.yml).
 - name: 讀取 elastic 密碼、mcp_user 密碼、ES ClusterIP
-  command: "{{ kubectl_cmd }} {{ item.args }}"
+  command: "kubectl {{ item.args }}"
   register: es_lookup
   changed_when: false
   no_log: "{{ item.secret }}"

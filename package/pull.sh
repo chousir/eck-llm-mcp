@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 在「有網路」的機器執行：拉映像存成 tar、拉模型打包成 tar，並產生 SHA256SUMS。
-# 用法：package/pull.sh [images|models|all]（預設 all）
-# 輸出（package/data/，已 gitignore）：images/*.tar、ollama-models.tar、SHA256SUMS
-# 環境變數：PLATFORM（預設 linux/amd64）、CONTAINER_CLI（docker|podman，預設 docker）
+# Run on a machine WITH internet access: pull images into tars, pull models into a tar, and write SHA256SUMS.
+# Usage: package/pull.sh [images|models|all]  (default: all)
+# Output (package/data/, gitignored): images/*.tar, ollama-models.tar, SHA256SUMS
+# Env vars: PLATFORM (default linux/amd64), CONTAINER_CLI (docker|podman, default docker)
 set -euo pipefail
 cd "$(dirname "$0")"
 CLI="${CONTAINER_CLI:-docker}"
@@ -20,13 +20,13 @@ pull_images() {
 }
 
 pull_models() {
-  # 用與正式環境同版本的 Ollama 容器 pull，模型目錄位置才確定
+  # Pull with the same Ollama version as production so the models directory layout is known
   local ollama_image data user_args=()
   ollama_image="$(list images.list | grep 'ollama/ollama:' | head -1)"
   data="$PWD/data/ollama-data"
-  name="ollama-pull-$$"   # 全域變數：EXIT trap 執行時 function 已結束
+  name="ollama-pull-$$"   # global on purpose: the function has already returned when the EXIT trap runs
   mkdir -p "$data/models"
-  [ "$CLI" = docker ] && user_args=(--user "$(id -u):$(id -g)")   # 檔案 owner 是目前使用者，才能 tar / 清理
+  [ "$CLI" = docker ] && user_args=(--user "$(id -u):$(id -g)")   # files owned by the current user so they can be tarred / cleaned up
   trap '"$CLI" rm -f "$name" >/dev/null 2>&1 || true' EXIT
   "$CLI" run -d --name "$name" ${user_args[@]+"${user_args[@]}"} -e HOME=/tmp -e OLLAMA_MODELS=/models \
     -v "$data/models:/models" "$ollama_image" >/dev/null
@@ -36,7 +36,7 @@ pull_models() {
     "$CLI" exec "$name" ollama pull "$model"
   done
   "$CLI" exec "$name" ollama list
-  tar cf data/ollama-models.tar -C "$data" models     # blob 已壓縮，不必 gzip
+  tar cf data/ollama-models.tar -C "$data" models     # blobs are already compressed, no gzip needed
 }
 
 case "$what" in

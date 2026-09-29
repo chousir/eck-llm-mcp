@@ -1,36 +1,54 @@
 ---
-# 環境假設（kubespray、單一 cluster、MetalLB、cert-manager 的 ca-issuer）寫死在 vars/main.yml 與模板裡，
-# 見 README「環境假設」。這裡只放可能要改的值；覆寫請寫到 inventory/group_vars/all.yml。
+# Environment assumptions (kubespray, single cluster, MetalLB, cert-manager ca-issuer) are hardcoded in templates and tasks; see the README (environment assumptions section).
+# Models, images, model tar path and VIP are in inventory/group_vars/all.yml; put overrides for other variables there too.
 
-# AI 元件要跑的節點（kubectl get nodes 的 NAME），必須就是 ansible 目標主機：模型與本地 PV 都在這台。
-ai_node_name: k8s-controller01
-
-# 模型 tar（package/pull.sh 產生的 ollama-models.tar），只有 PV 上缺模型時才會讀取。
-ollama_models_src: /opt/eck-llm-mcp/ollama-models.tar
-# name:tag；第一個是主力模型（預設模型、tool_calls 驗證對象），需與 package/models.list 對應
-ollama_models:
-  - qwen3.6:35b
-  - nomic-embed-text:latest
-  # - qwen3-coder:30b      # 規劃書 §4.4 備援；有打包才打開
-
-# 既有 ECK 的 Elasticsearch 資源（stack，不是 operator）。查法：kubectl get elasticsearch -A
+# The existing ECK Elasticsearch resource (the stack, not the operator). Look it up with: kubectl get elasticsearch -A
 eck_es_name: prod
 eck_namespace: elastic-stack
 
-# es-mcp 唯讀帳號可讀的 index；建議收斂成實際要查的 pattern，例如 ["netflow-*"]
+# Indices the es-mcp read-only user may read; narrow it to the patterns you really query, e.g. ["netflow-*"]
 mcp_index_patterns: ["*"]
 
-# 映像：原始名稱，節點直接 pull（不加 registry 位址）
-ollama_image: ollama/ollama:0.32.9
-open_webui_image: ghcr.io/open-webui/open-webui:v0.11.0
-es_mcp_image: docker.elastic.co/mcp/elasticsearch:0.4.6
-nginx_image: nginx:1.30-alpine
-
-# ---- Ollama（CPU 推論；調校方式見 README「調校」）----
-ollama_context_length: 32768   # 太小會截掉工具定義，模型就不呼叫工具
-ollama_num_thread: 32          # 推論執行緒數；controller 兼跑 etcd/apiserver，要比核心數少
+# ---- Ollama (CPU inference; see the README tuning section) ----
+ollama_context_length: 32768   # too small truncates the tool definitions and the model stops calling tools
+ollama_num_thread: 32          # inference threads; the controller also runs etcd/apiserver, so keep this below the core count
 ollama_memory_limit: 128Gi
 
 # ---- Open WebUI HTTPS ----
-cert_issuer_name: ca-issuer    # CA 型 ClusterIssuer
-open_webui_vip: ""             # 空＝MetalLB 自動配發；要固定 IP 時填
+cert_issuer_name: ca-issuer    # CA-type ClusterIssuer
+
+# Internal constants (fixed by the environment, no need to change)
+ai_namespace: ai
+manifest_dir: /etc/k8s/eck-llm-mcp
+
+ollama_pv_path: /var/lib/ai/ollama
+openwebui_pv_path: /var/lib/ai/openwebui
+ollama_models_dir: "{{ ollama_pv_path }}/models"
+ollama_primary_model: "{{ ollama_models[0] }}"
+ollama_embed_model: nomic-embed-text:latest
+
+ollama_url: "http://ollama.{{ ai_namespace }}.svc:11434"
+es_mcp_url: "http://es-mcp.{{ ai_namespace }}.svc:8080/mcp"
+# ECK naming convention: <name>-es-http, <name>-es-elastic-user; ES enables TLS (self-signed) by default
+es_url: "https://{{ eck_es_name }}-es-http.{{ eck_namespace }}.svc:9200"
+es_admin_secret: "{{ eck_es_name }}-es-elastic-user"
+
+# Written to the Open WebUI DB on first start (change it later under Admin -> Settings -> Integrations)
+# an empty access_grants means admin only; here it is opened read-only to every signed-in user
+webui_tool_server_connections:
+  - type: mcp
+    url: "{{ es_mcp_url }}"
+    path: ""
+    auth_type: none
+    key: ""
+    config:
+      enable: true
+      access_grants:
+        - { principal_type: user, principal_id: "*", permission: read }
+    info:
+      id: es-mcp
+      name: Elasticsearch
+      description: "Elasticsearch read-only tools: list_indices / get_mappings / search / esql / get_shards"
+webui_default_model_params:
+  function_calling: native
+  num_thread: "{{ ollama_num_thread | int }}"

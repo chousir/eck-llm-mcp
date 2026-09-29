@@ -1,4 +1,4 @@
-# Ollama（LLM 推論）+ es-mcp（Elasticsearch MCP Server）
+# Ollama (LLM inference) + es-mcp (Elasticsearch MCP Server)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +6,7 @@ metadata:
   namespace: {{ ai_namespace }}
 spec:
   replicas: 1
-  strategy: { type: Recreate }        # RWO 本地 PV：新舊 pod 不可同時存在
+  strategy: { type: Recreate }        # RWO local PV: old and new pods must not run at the same time
   selector:
     matchLabels: { app: ollama }
   template:
@@ -16,7 +16,7 @@ spec:
       tolerations:
         - { key: node-role.kubernetes.io/control-plane, effect: NoSchedule }
       nodeSelector:
-        kubernetes.io/hostname: {{ ai_node_name }}
+        kubernetes.io/hostname: {{ inventory_hostname }}
       containers:
         - name: ollama
           image: {{ ollama_image }}
@@ -24,15 +24,15 @@ spec:
             - containerPort: 11434
           env:
             - { name: OLLAMA_HOST, value: "0.0.0.0" }
-            - { name: OLLAMA_KEEP_ALIVE, value: "-1" }          # RAM 夠，模型常駐不卸載
-            - { name: OLLAMA_MAX_LOADED_MODELS, value: "3" }    # 主力 + 備援 + 嵌入
+            - { name: OLLAMA_KEEP_ALIVE, value: "-1" }          # plenty of RAM: keep models loaded, never unload
+            - { name: OLLAMA_MAX_LOADED_MODELS, value: "3" }    # primary + fallback + embedding
             - { name: OLLAMA_NUM_PARALLEL, value: "4" }
             - { name: OLLAMA_CONTEXT_LENGTH, value: "{{ ollama_context_length }}" }
           readinessProbe:
             httpGet: { path: /api/version, port: 11434 }
             periodSeconds: 5
           resources:
-            # 不設 CPU limit：cgroup 限流會讓 Ollama 極慢；執行緒數由 Open WebUI 的 num_thread 控制
+            # No CPU limit: cgroup throttling makes Ollama extremely slow; the thread count is controlled by num_thread in Open WebUI
             requests: { memory: 32Gi, cpu: "8" }
             limits: { memory: {{ ollama_memory_limit }} }
           volumeMounts:
@@ -67,7 +67,7 @@ spec:
       tolerations:
         - { key: node-role.kubernetes.io/control-plane, effect: NoSchedule }
       nodeSelector:
-        kubernetes.io/hostname: {{ ai_node_name }}
+        kubernetes.io/hostname: {{ inventory_hostname }}
       containers:
         - name: es-mcp
           image: {{ es_mcp_image }}
@@ -78,7 +78,7 @@ spec:
             - name: ES_PASSWORD
               valueFrom:
                 secretKeyRef: { name: es-mcp-cred, key: password }
-            - { name: ES_SSL_SKIP_VERIFY, value: "true" }       # ECK 自簽憑證；僅叢集內 pod -> ES
+            - { name: ES_SSL_SKIP_VERIFY, value: "true" }       # ECK self-signed certificate; in-cluster pod -> ES only
             - { name: HTTP_ADDRESS, value: "0.0.0.0:8080" }
           ports:
             - containerPort: 8080

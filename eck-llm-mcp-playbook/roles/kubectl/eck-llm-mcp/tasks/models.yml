@@ -1,6 +1,6 @@
 ---
-# 模型 tar（內含 models/blobs、models/manifests）-> PV。只有 PV 上缺任一模型時才讀取 tar。
-# PV 掛在容器 /root/.ollama，所以模型落在 <ollama_pv_path>/models。
+# Model tar (contains models/blobs, models/manifests) -> PV. The tar is only read when any model is missing on the PV.
+# The PV is mounted at /root/.ollama in the container, so models live under <ollama_pv_path>/models.
 - name: 檢查 PV 上各模型的 manifest
   stat:
     path: "{{ ollama_models_dir }}/manifests/registry.ollama.ai/library/{{ item.split(':')[0] }}/{{ item.split(':')[1] }}"

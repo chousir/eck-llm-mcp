@@ -1,4 +1,4 @@
-# namespace + 本地 PV/PVC（PV/PVC 容量建立後不可變更，要改須先刪除重建）
+# namespace + local PVs/PVCs (PV/PVC capacity is immutable after creation; delete and recreate to change it)
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -19,7 +19,7 @@ spec:
     required:
       nodeSelectorTerms:
         - matchExpressions:
-            - { key: kubernetes.io/hostname, operator: In, values: ["{{ ai_node_name }}"] }
+            - { key: kubernetes.io/hostname, operator: In, values: ["{{ inventory_hostname }}"] }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -48,7 +48,7 @@ spec:
     required:
       nodeSelectorTerms:
         - matchExpressions:
-            - { key: kubernetes.io/hostname, operator: In, values: ["{{ ai_node_name }}"] }
+            - { key: kubernetes.io/hostname, operator: In, values: ["{{ inventory_hostname }}"] }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

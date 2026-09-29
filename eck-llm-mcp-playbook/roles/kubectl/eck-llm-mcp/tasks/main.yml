@@ -1,6 +1,6 @@
 ---
-# 順序有依賴，勿調整：prereqs -> models -> secrets -> es_security -> deploy -> verify
-# tags：models（只匯入模型）、verify（只做驗證）。第一次部署不要加 --tags。
+# The order matters, do not rearrange: prereqs -> models -> secrets -> es_security -> deploy -> verify
+# tags: models (import models only), verify (verification only). Do not use --tags on the first deployment.
 - import_tasks: prereqs.yml
 
 - import_tasks: models.yml

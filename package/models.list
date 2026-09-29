@@ -1,4 +1,4 @@
-# 要打包的 Ollama 模型（name:tag），需與 defaults/main.yml 的 ollama_models 對應。
+# Ollama models to package (name:tag); must match ollama_models in inventory/group_vars/all.yml.
 qwen3.6:35b
 nomic-embed-text:latest
-# qwen3-coder:30b    # 規劃書 §4.4 備援；要用才取消註解
+# qwen3-coder:30b    # fallback model (planning doc §4.4); uncomment only if needed

@@ -1,6 +1,6 @@
 #!/bin/sh
-# 在 open-webui pod 內執行（kubectl exec -i deploy/open-webui -- sh -s），
-# 走的網路路徑與實際運作時相同。任何一項失敗 -> 結尾 exit 1。
+# Runs inside the open-webui pod (kubectl exec -i deploy/open-webui -- sh -s),
+# so it takes the same network path as real traffic. Any failure -> exit 1 at the end.
 FAIL=0
 ok()   { echo "  [PASS] $*"; }
 bad()  { echo "  [FAIL] $*"; FAIL=1; }
@@ -11,10 +11,10 @@ MCP="{{ es_mcp_url }}"
 MCP_BASE="http://es-mcp.{{ ai_namespace }}.svc:8080"
 PRIMARY="{{ ollama_primary_model }}"
 
-# ---- MCP streamable HTTP：回應可能是 JSON 或 SSE（data: {...}） ----
+# ---- MCP streamable HTTP: the response may be JSON or SSE (data: {...}) ----
 HDR=/tmp/mcp.hdr
 SID=""
-mcp() {  # $1 = JSON-RPC body；輸出回應 JSON
+mcp() {  # $1 = JSON-RPC body; prints the response JSON
   if [ -n "$SID" ]; then
     out=$(curl -s -m 30 -D "$HDR" -X POST "$MCP" -H 'Content-Type: application/json' \
       -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $SID" -d "$1")

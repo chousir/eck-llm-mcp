@@ -1,6 +1,6 @@
 ---
-# 順序：Ollama + es-mcp -> Service（取得 MetalLB IP）-> Certificate（SAN=IP）-> Open WebUI
-# 任何一步逾時，rescue 會列出 pod 與 events（離線環境常見：ImagePullBackOff、Pending）。
+# Order: Ollama + es-mcp -> Service (get the MetalLB IP) -> Certificate (SAN = IP) -> Open WebUI
+# If any step times out, the rescue lists pods and events (common in offline setups: ImagePullBackOff, Pending).
 - name: 部署並等待就緒
   block:
     - name: Render 10-backend.yaml 與 20-webui-svc.yaml
@@ -11,18 +11,18 @@
       loop: [10-backend.yaml, 20-webui-svc.yaml]
 
     - name: Apply 10-backend.yaml 與 20-webui-svc.yaml
-      command: "{{ kubectl_cmd }} apply -f {{ manifest_dir }}/{{ item }}"
+      command: "kubectl apply -f {{ manifest_dir }}/{{ item }}"
       register: apply_result
       changed_when: apply_result.stdout is search('created|configured')
       loop: [10-backend.yaml, 20-webui-svc.yaml]
 
     - name: 等待 ollama、es-mcp rollout
-      command: "{{ kubectl_cmd }} -n {{ ai_namespace }} rollout status deploy/{{ item }} --timeout=600s"
+      command: "kubectl -n {{ ai_namespace }} rollout status deploy/{{ item }} --timeout=600s"
       changed_when: false
       loop: [ollama, es-mcp]
 
     - name: 等待 MetalLB 配發 open-webui 的 IP
-      command: "{{ kubectl_cmd }} -n {{ ai_namespace }} get svc open-webui -o jsonpath={.status.loadBalancer.ingress[0].ip}"
+      command: "kubectl -n {{ ai_namespace }} get svc open-webui -o jsonpath={.status.loadBalancer.ingress[0].ip}"
       register: webui_svc_ip
       changed_when: false
       until: webui_svc_ip.stdout | length > 0
@@ -40,23 +40,23 @@
         mode: "0644"
 
     - name: Apply 30-webui.yaml（Certificate + nginx 設定 + Deployment）
-      command: "{{ kubectl_cmd }} apply -f {{ manifest_dir }}/30-webui.yaml"
+      command: "kubectl apply -f {{ manifest_dir }}/30-webui.yaml"
       register: apply_result
       changed_when: apply_result.stdout is search('created|configured')
 
     - name: 等待憑證由 {{ cert_issuer_name }} 簽發
-      command: "{{ kubectl_cmd }} -n {{ ai_namespace }} wait --for=condition=Ready certificate/open-webui-tls --timeout=120s"
+      command: "kubectl -n {{ ai_namespace }} wait --for=condition=Ready certificate/open-webui-tls --timeout=120s"
       changed_when: false
 
     - name: 等待 open-webui rollout
-      command: "{{ kubectl_cmd }} -n {{ ai_namespace }} rollout status deploy/open-webui --timeout=600s"
+      command: "kubectl -n {{ ai_namespace }} rollout status deploy/open-webui --timeout=600s"
       changed_when: false
   rescue:
     - name: 收集診斷資訊
       shell: |
-        {{ kubectl_cmd }} -n {{ ai_namespace }} get pods -o wide
+        kubectl -n {{ ai_namespace }} get pods -o wide
         echo '--- events ---'
-        {{ kubectl_cmd }} -n {{ ai_namespace }} get events --sort-by=.lastTimestamp | tail -25
+        kubectl -n {{ ai_namespace }} get events --sort-by=.lastTimestamp | tail -25
       register: deploy_diag
       changed_when: false
       failed_when: false

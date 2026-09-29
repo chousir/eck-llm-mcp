@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 在「離線環境」執行：校驗 SHA256SUMS，load 映像並以原始名稱 push（registry 不需地址與密碼）。
-# 環境變數：CONTAINER_CLI（docker|podman，預設 docker）
+# Run in the OFFLINE environment: verify SHA256SUMS, load the images and push them under their original names (no registry address or password needed).
+# Env vars: CONTAINER_CLI (docker|podman, default docker)
 set -euo pipefail
 cd "$(dirname "$0")"
 CLI="${CONTAINER_CLI:-docker}"

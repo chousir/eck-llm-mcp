@@ -9,11 +9,11 @@
 
 ## 環境假設（寫死在 playbook，不是變數）
 
-kubespray 建出的單一 cluster；Ansible 目標主機就是 AI 節點（預設 `k8s-controller01`，需 python3 與 sudo）。
+kubespray 建出的單一 cluster；Ansible 目標主機就是 AI 節點（`inventory/hosts.yaml` 的主機名稱**必須等於 k8s 節點名稱**，即 `kubectl get nodes` 的 NAME；需 python3 與 sudo）。
 
 | 假設 | 內容 |
 |---|---|
-| kubectl | `/usr/local/bin/kubectl --kubeconfig=/etc/kubernetes/admin.conf`（以 root 執行） |
+| kubectl | 以 root（become）直接執行 `kubectl`：root 的 PATH 找得到 kubectl，且有 kubeconfig（kubespray 會放 `/root/.kube/config`） |
 | 映像 | 節點可直接以原始名稱 pull（不加 registry 位址，例如 `ollama/ollama:0.32.9`） |
 | 對外 | MetalLB 配發 LoadBalancer IP |
 | TLS | cert-manager 有 CA 型 ClusterIssuer `ca-issuer`；使用者瀏覽器已信任該 CA |
@@ -47,7 +47,7 @@ sudo install -D -m 0644 package/data/ollama-models.tar /opt/eck-llm-mcp/ollama-m
 
 ```bash
 cd eck-llm-mcp-playbook
-# 改 inventory/hosts（ansible_host、ansible_user；直接在節點上跑可用 ansible_connection=local）
+# 改 inventory/hosts.yaml（主機名稱＝k8s 節點名稱、ansible_host；直接在節點上跑可加 ansible_connection: local）
 ansible-playbook site.yml                 # 部署 + 驗證
 ansible-playbook site.yml --tags models   # 只匯入模型（之後新增模型時）
 ansible-playbook site.yml --tags verify   # 只重跑驗證
@@ -68,13 +68,12 @@ ansible-playbook site.yml --tags verify   # 只重跑驗證
 
 ## 3. 參數
 
-只有這些（`roles/kubectl/eck-llm-mcp/defaults/main.yml`），覆寫寫到 `inventory/group_vars/all.yml`。都有預設值，環境相符就不用填。
+環境相關的值在 `inventory/group_vars/all.yml`（模型、映像、模型 tar 路徑、VIP），其餘在 `roles/kubectl/eck-llm-mcp/defaults/main.yml`；覆寫一律寫到 `all.yml`。環境相符就不用改。
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `ai_node_name` | `k8s-controller01` | AI 節點名稱（`kubectl get nodes`），必須就是 ansible 目標主機 |
 | `ollama_models_src` | `/opt/eck-llm-mcp/ollama-models.tar` | 模型 tar 在目標主機的路徑（PV 缺模型時才讀） |
-| `ollama_models` | qwen3.6:35b、nomic-embed-text:latest | 第一個是主力模型；備援 `qwen3-coder:30b` 有打包才取消註解 |
+| `ollama_models` | qwen3.6:35b、nomic-embed-text:latest | 第一個是主力模型；備援 `qwen3-coder:30b` 有打包才加進來 |
 | `eck_es_name` `eck_namespace` | `prod`、`elastic-stack` | stack 的 Elasticsearch 資源（不是 operator）；`kubectl get elasticsearch -A` |
 | `mcp_index_patterns` | `["*"]` | es-mcp 可讀的 index，建議收斂（例如 `["netflow-*"]`）；es-mcp 的 `/mcp` 無認證，這是主要的權限邊界 |
 | `ollama_image` `open_webui_image` `es_mcp_image` `nginx_image` | 原始名稱 | 與 `package/images.list` 逐字一致 |
@@ -104,7 +103,7 @@ ES 本身仍是 ECK 自簽憑證，es-mcp 以 `ES_SSL_SKIP_VERIFY=true` 連線�
 | 症狀 | 處理 |
 |---|---|
 | 部署失敗訊息內有 `ImagePullBackOff` | 映像名稱與 registry 內不一致，或節點 mirror 未涵蓋該 registry（ghcr.io、docker.elastic.co） |
-| Pod `Pending` | `kubectl -n ai describe pod`：nodeSelector（`ai_node_name`）、記憶體不足、PVC 未 Bound |
+| Pod `Pending` | `kubectl -n ai describe pod`：nodeSelector（inventory 主機名稱要等於節點名稱）、記憶體不足、PVC 未 Bound |
 | 找不到模型 tar / 缺模型 | 依第 1 節把 `ollama-models.tar` 放到 `ollama_models_src` |
 | ES 連不到 / 401 | `eck_es_name`、`eck_namespace` 與 `kubectl get elasticsearch -A` 不符；目標主機需能連到 ES 的 ClusterIP |
 | 模型不呼叫工具 | `ollama_context_length` 太小；`verify` 第 2 項可確認模型本身的 tool_calls |
