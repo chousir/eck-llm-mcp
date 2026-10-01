@@ -36,7 +36,8 @@ if [ -z "$TAGS" ]; then bad "連不到 $OLLAMA/api/tags"; else
 fi
 
 echo "2) Ollama tool_calls（$PRIMARY）"
-REQ=$(jq -n --arg m "$PRIMARY" '{model:$m,stream:false,
+# same num_thread as Open WebUI sends: stays under the CPU limit and does not make Ollama reload the model
+REQ=$(jq -n --arg m "$PRIMARY" --argjson t {{ ollama_num_thread | int }} '{model:$m,stream:false,options:{num_thread:$t},
   messages:[{role:"user",content:"What is the weather in Taipei? Use the tool."}],
   tools:[{type:"function",function:{name:"get_weather",description:"Get current weather for a city",
     parameters:{type:"object",properties:{city:{type:"string"}},required:["city"]}}}]}')
@@ -48,7 +49,7 @@ else
 fi
 
 echo "3) Open WebUI -> es-mcp"
-[ "$(curl -s -m 10 "$MCP_BASE/ping")" ] && ok "/ping 有回應" || bad "$MCP_BASE/ping 無回應"
+curl -sf -m 10 -o /dev/null "$MCP_BASE/ping" && ok "/ping 有回應" || bad "$MCP_BASE/ping 無回應"
 INIT=$(mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}')
 SID=$(sed -n 's/^[Mm][Cc][Pp]-[Ss]ession-[Ii]d: *//p' "$HDR" | tr -d '\r')
 if echo "$INIT" | jq -e '.result.serverInfo' >/dev/null 2>&1; then ok "MCP initialize"; else bad "MCP initialize 失敗：$(echo "$INIT" | head -c 300)"; fi

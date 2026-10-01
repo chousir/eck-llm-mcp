@@ -32,9 +32,10 @@ spec:
             httpGet: { path: /api/version, port: 11434 }
             periodSeconds: 5
           resources:
-            # No CPU limit: cgroup throttling makes Ollama extremely slow; the thread count is controlled by num_thread in Open WebUI
-            requests: { memory: 32Gi, cpu: "8" }
-            limits: { memory: {{ ollama_memory_limit }} }
+            # The CPU limit sits just above num_thread (set via Open WebUI), so normal inference is not throttled but nothing can use
+            # every core. The request is kept low so etcd/apiserver win the CPU shares when the node is saturated.
+            requests: { memory: 32Gi, cpu: "1" }
+            limits: { cpu: "{{ ollama_cpu_limit }}", memory: {{ ollama_memory_limit }} }
           volumeMounts:
             - { name: models, mountPath: /root/.ollama }
       volumes:

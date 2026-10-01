@@ -46,6 +46,9 @@ case "$what" in
   *) echo "用法：$0 [images|models|all]" >&2; exit 1 ;;
 esac
 
-(cd data && { ls images/*.tar; ls ollama-models.tar; } 2>/dev/null | xargs sha256sum > SHA256SUMS)
+# Only list what exists: "pull.sh images" runs before any model tar does (and the reverse)
+(cd data && files=() && for f in images/*.tar ollama-models.tar; do
+  if [ -e "$f" ]; then files+=("$f"); fi
+done && sha256sum "${files[@]}" > SHA256SUMS)
 echo "==> data/SHA256SUMS"; cat data/SHA256SUMS
 echo "帶走：package/data/{images,ollama-models.tar,SHA256SUMS}（ollama-data/ 是暫存，不必帶）"

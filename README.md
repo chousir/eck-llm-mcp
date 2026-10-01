@@ -79,6 +79,7 @@ ansible-playbook site.yml --tags verify   # 只重跑驗證
 | `ollama_image` `open_webui_image` `es_mcp_image` `nginx_image` | 原始名稱 | 與 `package/images.list` 逐字一致 |
 | `ollama_context_length` | `32768` | 太小會截掉工具定義，模型就不呼叫工具 |
 | `ollama_num_thread` | `32` | 推論執行緒數，見下 |
+| `ollama_cpu_limit` | `ollama_num_thread + 2` | Ollama CPU 上限（自動推導，一般不用改） |
 | `ollama_memory_limit` | `128Gi` | Ollama 記憶體上限 |
 | `cert_issuer_name` | `ca-issuer` | CA 型 ClusterIssuer |
 | `open_webui_vip` | 空 | 空＝MetalLB 自動配發；要固定 IP 時填 |
@@ -86,7 +87,7 @@ ansible-playbook site.yml --tags verify   # 只重跑驗證
 ### 調校（CPU 推論、controller 兼跑 control plane）
 
 - **記憶體**：主力模型約 24GB（MoE，每 token 僅 3B 啟用），1TB RAM 綽綽有餘；模板已設 `KEEP_ALIVE=-1`（不卸載）、`MAX_LOADED_MODELS=3`、`NUM_PARALLEL=4`。瓶頸是 CPU 與記憶體頻寬。
-- **保護 etcd / apiserver**：Ollama 預設會開滿所有核心。不設 CPU limit（cgroup 限流會讓 Ollama 極慢），改用 `ollama_num_thread` 少開幾條（透過 Open WebUI 的模型預設參數 `num_thread` 帶給 Ollama）。先確認核心配置：`lscpu | grep -E 'Socket|Core|Thread'`——若 40 是含超執行緒的邏輯核（20 實體核），設成實體核數 − 4 左右（例如 16）。
+- **保護 etcd / apiserver**：兩層保護。(1) `ollama_num_thread` 控制推論執行緒數（透過 Open WebUI 的模型預設參數 `num_thread` 帶給 Ollama，`verify` 的測試也帶同一個值）；(2) CPU limit 設為 `ollama_num_thread + 2`，正常推論不會被 cgroup 限流，但繞過 `num_thread` 的呼叫（知識庫 embedding、直接打 Ollama API）也無法用滿所有核心。CPU request 只有 1，節點飽和時 etcd / apiserver 的 CPU 權重較高。先確認核心配置：`lscpu | grep -E 'Socket|Core|Thread'`——若 40 是含超執行緒的邏輯核（20 實體核），設成實體核數 − 4 左右（例如 16）。
 - 用 `kubectl -n ai exec deploy/ollama -- ollama ps` 觀察實際佔用與載入的模型再調整。
 
 ### HTTPS / CA

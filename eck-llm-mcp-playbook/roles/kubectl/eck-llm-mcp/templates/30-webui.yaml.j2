@@ -71,6 +71,7 @@ spec:
             # On first start (no users in the DB) create the admin automatically and disable open sign-up
             - { name: WEBUI_ADMIN_EMAIL, value: admin@example.com }
             - { name: WEBUI_ADMIN_NAME, value: Admin }
+            - { name: ENABLE_SIGNUP, value: "false" }
             - name: WEBUI_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef: { name: open-webui-secret, key: WEBUI_ADMIN_PASSWORD }
