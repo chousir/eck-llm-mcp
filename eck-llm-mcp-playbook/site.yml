@@ -1,6 +1,6 @@
 ---
 - name: Deploy ECK LLM+MCP AI stack (Ollama + Open WebUI + Elasticsearch MCP)
-  hosts: k8s_controller
+  hosts: eck_llm
   become: true
   roles:
     - kubectl/eck-llm-mcp
