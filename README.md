@@ -78,7 +78,7 @@ ansible-playbook site.yml --tags verify   # 只重跑驗證
 | `mcp_index_patterns` | `["*"]` | es-mcp 可讀的 index，建議收斂（例如 `["netflow-*"]`）；es-mcp 的 `/mcp` 無認證，這是主要的權限邊界 |
 | `ollama_image` `open_webui_image` `es_mcp_image` `nginx_image` | 原始名稱 | 與 `package/images.list` 逐字一致 |
 | `ollama_context_length` | `32768` | 太小會截掉工具定義，模型就不呼叫工具 |
-| `ollama_num_thread` | `32` | 推論執行緒數，見下 |
+| `ollama_num_thread` | `16` | 推論執行緒數，見下 |
 | `ollama_cpu_limit` | `ollama_num_thread + 2` | Ollama CPU 上限（自動推導，一般不用改） |
 | `ollama_memory_limit` | `128Gi` | Ollama 記憶體上限 |
 | `cert_issuer_name` | `ca-issuer` | CA 型 ClusterIssuer |

@@ -11,7 +11,7 @@ mcp_index_patterns: ["*"]
 
 # ---- Ollama (CPU inference; see the README tuning section) ----
 ollama_context_length: 32768   # too small truncates the tool definitions and the model stops calling tools
-ollama_num_thread: 32          # inference threads; the controller also runs etcd/apiserver, so keep this below the core count
+ollama_num_thread: 16          # inference threads; the controller also runs etcd/apiserver, so keep this below the core count
 # CPU hard cap = num_thread + headroom: normal inference (num_thread threads) never hits the CFS quota, while callers that bypass
 # num_thread (RAG embedding, direct API calls) cannot take every core away from etcd/apiserver. Must stay >= the CPU request (1).
 ollama_cpu_limit: "{{ (ollama_num_thread | int) + 2 }}"
