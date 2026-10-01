@@ -1,4 +1,4 @@
 # Ollama models to package (name:tag); must match ollama_models in inventory/group_vars/all.yml.
 qwen3.6:35b
-nomic-embed-text:latest
+bge-m3:latest
 # qwen3-coder:30b    # fallback model (planning doc §4.4); uncomment only if needed

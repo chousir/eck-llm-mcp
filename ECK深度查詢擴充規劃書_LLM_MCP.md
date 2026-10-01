@@ -79,7 +79,7 @@ docker.elastic.co/mcp/elasticsearch:0.4.6   # Elasticsearch MCP,定版不用 lat
 ```
 qwen3.6:35b        # 主力,Qwen3.6-35B-A3B(MoE,35B 總 / 3B 啟動);~22.6GB(含 ~0.9GB 視覺 projector,文字查詢用不到但一併下載)
 qwen3-coder:30b    # 備援,Qwen3-Coder-30B-A3B(MoE,~3B 啟動,以上游 model card 為準);工具呼叫格式久經社群驗證 ~18.5GB
-nomic-embed-text   # 嵌入模型(RAG 用,§7)~275MB
+bge-m3             # 多語言嵌入模型(RAG 用,§7;中英混合檢索,nomic-embed-text 以英文為主故不用)~1.2GB
 ```
 
 > **模型權重不在容器映像裡**,是 Ollama 另外下載的 blob。離線搬遷見 §4.3——這是整個部署最容易漏、且檔案最大的部分。
@@ -90,7 +90,7 @@ nomic-embed-text   # 嵌入模型(RAG 用,§7)~275MB
 
 | 用途 | 容量 | 放哪 |
 |---|---|---|
-| Ollama 模型 blob | qwen3.6:35b(~23.5GB)+ qwen3-coder:30b(~18GB)+ nomic-embed-text(~0.3GB)+ 換版緩衝(~18GB)≈ **60GB** | controller 本地 PV(RAID5) |
+| Ollama 模型 blob | qwen3.6:35b(~23.5GB)+ qwen3-coder:30b(~18GB)+ bge-m3(~1.2GB)+ 換版緩衝(~18GB)≈ **60GB** | controller 本地 PV(RAID5) |
 | Open WebUI 資料(帳號、對話、MCP 連線設定、**知識庫向量索引**) | ~10GB | controller 本地 PV |
 
 > §3 的 PV 範本容量(`60Gi`)即依上表 Ollama 那列。controller 為 5×3.85TB SSD RAID5(~15.4TB),空間充裕。
@@ -99,7 +99,7 @@ nomic-embed-text   # 嵌入模型(RAG 用,§7)~275MB
 ### 2.4 先期安裝檢查清單
 
 - [ ] §2.1 全部映像已推入內部 registry,tag 已固定並記錄(ollama 0.32.9 / open-webui v0.11.0 / mcp 0.4.6)。
-- [ ] §2.2 全部模型已 `ollama pull`,blob 已打包(§4.3):qwen3.6:35b、qwen3-coder:30b、nomic-embed-text。
+- [ ] §2.2 全部模型已 `ollama pull`,blob 已打包(§4.3):qwen3.6:35b、qwen3-coder:30b、bge-m3。
 - [ ] §4.2 已驗證 `qwen3.6:35b` 的 tool_calls 輸出格式正確,否則已記錄改用 `qwen3-coder:30b`。
 - [ ] §2.5 其他帶入項備妥(index `.md`;`mcp_user` 與 `WEBUI_SECRET_KEY` 由 playbook 產生)。
 - [ ] controller 本地 PV 已規劃(Ollama 模型 60Gi、Open WebUI 資料 10Gi)。
@@ -255,7 +255,7 @@ curl -s http://localhost:11434/api/chat -d '{
 mkdir -p ./ollama-data
 docker run -d --name ollama-pull -v $PWD/ollama-data:/root/.ollama ollama/ollama:0.32.9
 docker exec ollama-pull ollama pull qwen3.6:35b
-docker exec ollama-pull ollama pull nomic-embed-text
+docker exec ollama-pull ollama pull bge-m3
 # docker exec ollama-pull ollama pull qwen3-coder:30b   # 備援(§4.4),要用才帶
 docker rm -f ollama-pull
 # blob 本身已壓縮，不必再 gzip；解開後會有 models/blobs 與 models/manifests
@@ -314,9 +314,9 @@ spec:
             - { name: WEBUI_AUTH, value: "true" }          # 開啟多人帳號
             - { name: ENABLE_SIGNUP, value: "true" }        # 僅示意；實際 playbook 改用 WEBUI_ADMIN_EMAIL/PASSWORD 自動建 admin 並關閉註冊(§5.2)
             - { name: WEBUI_SECRET_KEY, valueFrom: { secretKeyRef: { name: open-webui-secret, key: WEBUI_SECRET_KEY } } }
-            # RAG 嵌入走 Ollama + nomic-embed-text(§7.2)
+            # RAG 嵌入走 Ollama + bge-m3(§7.2)
             - { name: RAG_EMBEDDING_ENGINE, value: "ollama" }
-            - { name: RAG_EMBEDDING_MODEL, value: "nomic-embed-text" }
+            - { name: RAG_EMBEDDING_MODEL, value: "bge-m3" }
             - { name: RAG_OLLAMA_BASE_URL, value: "http://ollama.ai.svc:11434" }
           resources:
             requests: { memory: "2Gi", cpu: "1" }
@@ -524,7 +524,7 @@ index 一多,全部 .md 塞進 prompt 會爆 context 且稀釋注意力。用 RA
 
 **主線(Open WebUI 內建知識庫)**:
 
-1. 每個 index 的 `.md`(§7.1)上傳到 Open WebUI 的「知識庫(Knowledge)」集合。嵌入引擎在 §5.1 已設 Ollama + `nomic-embed-text`。
+1. 每個 index 的 `.md`(§7.1)上傳到 Open WebUI 的「知識庫(Knowledge)」集合。嵌入引擎在 §5.1 已設 Ollama + `bge-m3`。
 2. 把集合掛到模型,或對話中用 `#` 引用 → Open WebUI 自動檢索命中片段注入 prompt。
 3. **好處**:零額外元件、context 精簡、index 可無限擴充。
 
@@ -639,7 +639,7 @@ LLM 產生的 DSL 可能語法錯或查空。流程加一層:
 2. §4  部署 Ollama → §4.3 匯入模型 blob → 驗證 ollama run + tool_calls 格式(§4.2)
 3. §6  ES 建唯讀帳號 mcp_user → 部署 es-mcp(args: ["http"])→ §6.3 驗證 /ping 回 200 + es-mcp 能連 ES(list_indices)
 4. §5  部署 Open WebUI(admin 與 es-mcp 連線由環境變數自動建立)→ 建其餘使用者 → 驗證多人問答 + 工具呼叫
-5. §7  撰寫各 index .md 說明(含 few-shot)→ 上傳 Open WebUI 知識庫、設 nomic-embed-text 嵌入(§7.2);目標環境需重新嵌入
+5. §7  撰寫各 index .md 說明(含 few-shot)→ 上傳 Open WebUI 知識庫、設 bge-m3 嵌入(§7.2);目標環境需重新嵌入
 6. §9  逐項任務驗證(查詢 / Geofence / topology / 分析)
 7. §10 落實唯讀權限、逾時、稽核
 ```

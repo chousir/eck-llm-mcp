@@ -28,7 +28,7 @@ ollama_pv_path: /var/lib/ai/ollama
 openwebui_pv_path: /var/lib/ai/openwebui
 ollama_models_dir: "{{ ollama_pv_path }}/models"
 ollama_primary_model: "{{ ollama_models[0] }}"
-ollama_embed_model: nomic-embed-text:latest
+ollama_embed_model: bge-m3:latest
 
 ollama_url: "http://ollama.{{ ai_namespace }}.svc:11434"
 es_mcp_url: "http://es-mcp.{{ ai_namespace }}.svc:8080/mcp"

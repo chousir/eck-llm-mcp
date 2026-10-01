@@ -12,7 +12,7 @@ ollama_models_src: /opt/eck-llm-mcp/ollama-models.tar
 # add the fallback qwen3-coder:30b only if it was packaged
 ollama_models:
   - qwen3.6:35b
-  - nomic-embed-text:latest
+  - bge-m3:latest
 
 # Images: original names, pulled directly by the nodes (no registry prefix)
 ollama_image: ollama/ollama:0.32.9

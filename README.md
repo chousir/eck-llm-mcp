@@ -73,7 +73,7 @@ ansible-playbook site.yml --tags verify   # 只重跑驗證
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `ollama_models_src` | `/opt/eck-llm-mcp/ollama-models.tar` | 模型 tar 在目標主機的路徑（PV 缺模型時才讀） |
-| `ollama_models` | qwen3.6:35b、nomic-embed-text:latest | 第一個是主力模型；備援 `qwen3-coder:30b` 有打包才加進來 |
+| `ollama_models` | qwen3.6:35b、bge-m3:latest（多語言嵌入，RAG 用） | 第一個是主力模型；備援 `qwen3-coder:30b` 有打包才加進來 |
 | `eck_es_name` `eck_namespace` | `prod`、`elastic-stack` | stack 的 Elasticsearch 資源（不是 operator）；`kubectl get elasticsearch -A` |
 | `mcp_index_patterns` | `["*"]` | es-mcp 可讀的 index，建議收斂（例如 `["netflow-*"]`）；es-mcp 的 `/mcp` 無認證，這是主要的權限邊界 |
 | `ollama_image` `open_webui_image` `es_mcp_image` `nginx_image` | 原始名稱 | 與 `package/images.list` 逐字一致 |
