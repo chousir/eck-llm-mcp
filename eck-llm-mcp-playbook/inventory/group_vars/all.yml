@@ -10,8 +10,8 @@
 ollama_models:
   - qwen3.6:35b
   - bge-m3:latest
-ollama_primary_model: qwen3.6:35b       # default model, target of the tool_calls check, base of the assistant model
-ollama_embed_model: bge-m3:latest       # RAG embedding model
+ollama_primary_model: "{{ ollama_models[0] }}"       # default model, target of the tool_calls check, base of the assistant model
+ollama_embed_model: "{{ ollama_models[1] }}"       # RAG embedding model
 
 # Images: original names, pulled directly by the nodes (no registry prefix)
 ollama_image: ollama/ollama:0.32.9
@@ -23,3 +23,7 @@ open_webui_vip: ""             # empty = let MetalLB assign; set it to pin the I
 
 # Indices the es-mcp read-only user may read; narrow it to the patterns you really query, e.g. ["netflow-*"]
 mcp_index_patterns: ["*"]
+
+ollama_pv_path: /var/lib/ai/ollama
+openwebui_pv_path: /var/lib/ai/openwebui
+ollama_models_dir: "{{ ollama_pv_path }}/models"
