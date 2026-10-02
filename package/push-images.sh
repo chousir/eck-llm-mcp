@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run in the OFFLINE environment: verify SHA256SUMS, load every image tar and push the images in images.list under their original names
-# (no registry address or password needed).
+# (no registry address or password needed). Files listed in SHA256SUMS but absent from this host are skipped.
 # The tar file names do not matter (pull.sh writes ollama_ollama_0.32.9.tar, other tools write other names): the image names live inside
 # the tars, so every data/images/*.tar is loaded and each image in images.list must exist afterwards.
 # Env vars: CONTAINER_CLI (docker|podman, default docker)
@@ -8,7 +8,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 CLI="${CONTAINER_CLI:-docker}"
 
-(cd data && sha256sum -c SHA256SUMS)
+# --ignore-missing: SHA256SUMS also lists files that are not on this host (e.g. ollama-models.tar goes to the AI node only);
+# every file that IS here must match, and at least one must be verified.
+(cd data && sha256sum -c --ignore-missing SHA256SUMS)
 
 shopt -s nullglob
 tars=(data/images/*.tar)
