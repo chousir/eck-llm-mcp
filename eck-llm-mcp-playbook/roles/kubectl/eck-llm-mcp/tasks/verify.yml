@@ -1,9 +1,9 @@
 ---
-# Everything runs inside the open-webui pod (the image ships curl / jq / sh); see templates/smoke.sh.j2.
+# Everything runs inside the open-webui pod (the image ships curl / jq / sh); see templates/verify-smoke-test.sh.j2.
 - name: 執行連線驗證
   command: "kubectl -n {{ ai_namespace }} exec -i deploy/open-webui -c open-webui -- sh -s"
   args:
-    stdin: "{{ lookup('template', 'smoke.sh.j2') }}"
+    stdin: "{{ lookup('template', 'verify-smoke-test.sh.j2') }}"
   register: smoke
   changed_when: false
   failed_when: false
@@ -31,4 +31,4 @@
       - "Open WebUI : https://{{ webui_ip.stdout }}（憑證由 {{ cert_issuer_name }} 簽發，瀏覽器需信任該 CA）"
       - "admin 帳號 : admin@example.com"
       - "admin 密碼 : kubectl -n {{ ai_namespace }} get secret open-webui-secret -o jsonpath={.data.WEBUI_ADMIN_PASSWORD} | base64 -d"
-      - "開放註冊已自動關閉；其他使用者請到 Admin -> Users 建立。對話時需在輸入框 Tools 勾選 Elasticsearch。"
+      - "開放註冊已自動關閉；其他使用者請到 Admin -> Users 建立（角色選 user）。對話時模型選「{{ assistant_model_name }}」；若 Elasticsearch 工具沒有自動啟用，在輸入框 Tools 勾選。"

@@ -3,4 +3,4 @@
 ollama/ollama:0.32.9
 ghcr.io/open-webui/open-webui:v0.11.0
 docker.elastic.co/mcp/elasticsearch:0.4.6
-nginx:1.30-alpine
+nginx:1.23.0-alpine

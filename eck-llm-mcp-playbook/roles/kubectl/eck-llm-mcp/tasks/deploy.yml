@@ -3,18 +3,18 @@
 # If any step times out, the rescue lists pods and events (common in offline setups: ImagePullBackOff, Pending).
 - name: 部署並等待就緒
   block:
-    - name: Render 10-backend.yaml 與 20-webui-svc.yaml
+    - name: Render ollama-and-es-mcp.yaml 與 webui-loadbalancer-svc.yaml
       template:
         src: "{{ item }}.j2"
         dest: "{{ manifest_dir }}/{{ item }}"
         mode: "0644"
-      loop: [10-backend.yaml, 20-webui-svc.yaml]
+      loop: [ollama-and-es-mcp.yaml, webui-loadbalancer-svc.yaml]
 
-    - name: Apply 10-backend.yaml 與 20-webui-svc.yaml
+    - name: Apply ollama-and-es-mcp.yaml 與 webui-loadbalancer-svc.yaml
       command: "kubectl apply -f {{ manifest_dir }}/{{ item }}"
       register: apply_result
       changed_when: apply_result.stdout is search('created|configured')
-      loop: [10-backend.yaml, 20-webui-svc.yaml]
+      loop: [ollama-and-es-mcp.yaml, webui-loadbalancer-svc.yaml]
 
     - name: 等待 ollama、es-mcp rollout
       command: "kubectl -n {{ ai_namespace }} rollout status deploy/{{ item }} --timeout=600s"
@@ -33,14 +33,14 @@
       set_fact:
         webui_vip: "{{ webui_svc_ip.stdout }}"
 
-    - name: Render 30-webui.yaml
+    - name: Render webui-tls-deployment.yaml
       template:
-        src: 30-webui.yaml.j2
-        dest: "{{ manifest_dir }}/30-webui.yaml"
+        src: webui-tls-deployment.yaml.j2
+        dest: "{{ manifest_dir }}/webui-tls-deployment.yaml"
         mode: "0644"
 
-    - name: Apply 30-webui.yaml（Certificate + nginx 設定 + Deployment）
-      command: "kubectl apply -f {{ manifest_dir }}/30-webui.yaml"
+    - name: Apply webui-tls-deployment.yaml（Certificate + nginx 設定 + Deployment）
+      command: "kubectl apply -f {{ manifest_dir }}/webui-tls-deployment.yaml"
       register: apply_result
       changed_when: apply_result.stdout is search('created|configured')
 

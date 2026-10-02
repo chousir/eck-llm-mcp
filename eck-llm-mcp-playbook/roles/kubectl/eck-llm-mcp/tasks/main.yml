@@ -1,7 +1,8 @@
 ---
-# The order matters, do not rearrange: prereqs -> models -> secrets -> es_security -> deploy -> verify
-# tags: models (import models only), verify (verification only). Do not use --tags on the first deployment.
-- import_tasks: prereqs.yml
+# The order matters, do not rearrange: namespace_storage -> models -> secrets -> es_security -> deploy -> knowledge -> verify
+# tags: models (check models only), knowledge (re-sync the knowledge base only), verify (verification only).
+# Do not use --tags on the first deployment.
+- import_tasks: namespace_storage.yml
 
 - import_tasks: models.yml
   tags: [models]
@@ -11,6 +12,9 @@
 - import_tasks: es_security.yml
 
 - import_tasks: deploy.yml
+
+- import_tasks: knowledge.yml
+  tags: [knowledge]
 
 - import_tasks: verify.yml
   tags: [verify]

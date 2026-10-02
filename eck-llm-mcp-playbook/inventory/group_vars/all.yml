@@ -4,20 +4,22 @@
 # Note: the inventory host name (k8s-controller01 in hosts.yaml) must equal the k8s node name
 # (the NAME column of kubectl get nodes): templates use it for nodeSelector and the local PV node affinity.
 
-ansible_python_interpreter: auto_silent
-
-# Model tar (ollama-models.tar produced by package/pull.sh); only read when models are missing on the PV.
-ollama_models_src: /opt/eck-llm-mcp/ollama-models.tar
-# name:tag; the first one is the primary model (default model, target of the tool_calls check); must match package/models.list
-# add the fallback qwen3-coder:30b only if it was packaged
+# Models: extract ollama-models.tar into the Ollama PV yourself (README section 1); the playbook only checks they are there.
+# name:tag; must match package/models.list. The primary and embedding models must both be in this list.
+# Add the fallback qwen3-coder:30b only if it was packaged.
 ollama_models:
   - qwen3.6:35b
   - bge-m3:latest
+ollama_primary_model: qwen3.6:35b       # default model, target of the tool_calls check, base of the assistant model
+ollama_embed_model: bge-m3:latest       # RAG embedding model
 
 # Images: original names, pulled directly by the nodes (no registry prefix)
 ollama_image: ollama/ollama:0.32.9
 open_webui_image: ghcr.io/open-webui/open-webui:v0.11.0
 es_mcp_image: docker.elastic.co/mcp/elasticsearch:0.4.6
-nginx_image: nginx:1.30-alpine
+nginx_image: nginx:1.23.0-alpine
 
 open_webui_vip: ""             # empty = let MetalLB assign; set it to pin the IP
+
+# Indices the es-mcp read-only user may read; narrow it to the patterns you really query, e.g. ["netflow-*"]
+mcp_index_patterns: ["*"]

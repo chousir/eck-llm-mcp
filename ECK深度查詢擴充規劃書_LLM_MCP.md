@@ -70,7 +70,7 @@ ghcr.io/open-webui/open-webui:v0.11.0       # 多人前端 + MCP client;需 ≥v
 docker.elastic.co/mcp/elasticsearch:0.4.6   # Elasticsearch MCP,定版不用 latest(見 §1、§6)
 ```
 
-> 版本務必**固定 tag 並記錄**,不要用浮動 `latest`。另需 `nginx:1.30-alpine`(Open WebUI 的 TLS sidecar)。以 `package/pull.sh` 拉取、`package/push-images.sh` 推入內部 registry。實際 digest 請自行記錄於版控(例如附錄清冊旁)。
+> 版本務必**固定 tag 並記錄**,不要用浮動 `latest`。另需 `nginx:1.23.0-alpine`(Open WebUI 的 TLS sidecar)。以 `package/pull.sh` 拉取、`package/push-images.sh` 推入內部 registry。實際 digest 請自行記錄於版控(例如附錄清冊旁)。
 
 ### 2.2 模型權重(GGUF 量化,最大宗,務必先下載)
 
@@ -263,7 +263,7 @@ tar cf ollama-models.tar -C ollama-data models
 sha256sum ollama-models.tar > ollama-models.tar.sha256
 ```
 
-帶入離線環境、比對 sha256 後，放到 AI 節點(預設 `/opt/eck-llm-mcp/ollama-models.tar`，路徑由 `ollama_models_src` 設定)。**不必手動解壓**：playbook 的 `models` 步驟在 PV 缺任一模型時解開 tar 到 PV，並確認各模型 manifest 都在(打包與搬運的完整性靠 `package/pull.sh` 產生的 SHA256SUMS 校驗)。
+帶入離線環境、比對 sha256 後，放到 AI 節點並**自行解壓到 Ollama 的 PV**(`sudo tar -xf ollama-models.tar -C /var/lib/ai/ollama`，解開後為 `/var/lib/ai/ollama/models/{blobs,manifests}`)。playbook 的 `models` 步驟不匯入模型，只確認各模型 manifest 都在、缺任一個就中止(打包與搬運的完整性靠 `package/pull.sh` 產生的 SHA256SUMS 校驗)。
 
 ```bash
 ansible-playbook site.yml --tags models          # 只匯入模型

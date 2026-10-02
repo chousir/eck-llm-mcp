@@ -1,0 +1,33 @@
+---
+# Sync templates/knowledge/*.md into an Open WebUI knowledge base and (re)create the assistant model that has the system prompt,
+# the knowledge base and the Elasticsearch tool attached. Runs inside the open-webui pod (like verify.yml), signing in as admin.
+# Re-running replaces the knowledge base and the model, so edited documents take effect; use --tags knowledge to re-sync only.
+- name: 找出要上傳的知識文件
+  set_fact:
+    knowledge_docs: "{{ lookup('fileglob', role_path ~ '/templates/knowledge/*.md', wantlist=True) | sort }}"
+
+- name: 至少要有一份知識文件
+  assert:
+    that: knowledge_docs | length > 0
+    quiet: true
+    fail_msg: "{{ role_path }}/templates/knowledge/ 底下沒有 .md 文件。"
+
+- name: 同步知識庫與助手模型
+  command: "kubectl -n {{ ai_namespace }} exec -i deploy/open-webui -c open-webui -- sh -s"
+  args:
+    stdin: "{{ lookup('template', 'knowledge-sync.sh.j2') }}"
+  register: kb_sync
+  changed_when: false
+  failed_when: false
+  async: 1200        # embedding runs on CPU through Ollama
+  poll: 5
+
+- name: 同步結果
+  debug:
+    msg: "{{ (kb_sync.stdout | default('')).split('\n') + (kb_sync.stderr | default('')).split('\n') }}"
+
+- name: 同步有失敗就中止
+  assert:
+    that: kb_sync.rc | default(1) == 0
+    quiet: true
+    fail_msg: 知識庫同步有項目失敗，請看上方輸出（[FAIL] 行）。

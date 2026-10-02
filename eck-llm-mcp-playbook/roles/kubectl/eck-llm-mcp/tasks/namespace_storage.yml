@@ -7,13 +7,13 @@
     mode: "0755"
   loop: ["{{ ollama_pv_path }}", "{{ openwebui_pv_path }}", "{{ manifest_dir }}"]
 
-- name: Render 00-base.yaml
+- name: Render namespace-and-local-pv.yaml
   template:
-    src: 00-base.yaml.j2
-    dest: "{{ manifest_dir }}/00-base.yaml"
+    src: namespace-and-local-pv.yaml.j2
+    dest: "{{ manifest_dir }}/namespace-and-local-pv.yaml"
     mode: "0644"
 
-- name: Apply 00-base.yaml（namespace + PV/PVC）
-  command: "kubectl apply -f {{ manifest_dir }}/00-base.yaml"
+- name: Apply namespace-and-local-pv.yaml（namespace + PV/PVC）
+  command: "kubectl apply -f {{ manifest_dir }}/namespace-and-local-pv.yaml"
   register: apply_result
   changed_when: apply_result.stdout is search('created|configured')

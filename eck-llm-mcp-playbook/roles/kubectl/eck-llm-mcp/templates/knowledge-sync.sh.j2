@@ -1,0 +1,107 @@
+#!/bin/sh
+# Runs inside the open-webui pod (kubectl exec -i deploy/open-webui -- sh -s), signed in as the admin from the pod environment.
+# 1. replace the knowledge base with the documents in templates/knowledge/   2. check that retrieval works (bge-m3 embedding)
+# 3. replace the assistant model (system prompt + knowledge base + Elasticsearch tool). Documents are embedded as base64,
+# so nothing in them is interpreted by the shell or by Jinja.
+FAIL=0
+ok()   { echo "  [PASS] $*"; }
+bad()  { echo "  [FAIL] $*"; FAIL=1; }
+warn() { echo "  [WARN] $*"; }
+
+API=http://127.0.0.1:8080/api/v1
+KB_NAME="{{ knowledge_base_name }}"
+MODEL_ID="{{ assistant_model_id }}"
+MODEL_NAME="{{ assistant_model_name }}"
+BASE_MODEL="{{ ollama_primary_model }}"
+JSON='Content-Type: application/json'
+GRANT='[{"principal_type":"user","principal_id":"*","permission":"read"}]'   # readable by every signed-in user
+
+W=/tmp/kb-sync
+rm -rf "$W"; mkdir -p "$W/docs"
+{% for f in knowledge_docs %}
+printf '%s' '{{ lookup('file', f) | b64encode }}' | base64 -d > "$W/docs/{{ f | basename }}"
+{% endfor %}
+printf '%s' '{{ lookup('file', role_path ~ '/templates/system-prompt.txt') | b64encode }}' | base64 -d > "$W/system-prompt.txt"
+
+call() {  # $1 = method, $2 = path under /api/v1, rest = curl args
+  m=$1; p=$2; shift 2
+  curl -s -m 120 -X "$m" -H "Authorization: Bearer $TOKEN" "$API$p" "$@"
+}
+
+echo "0) admin 登入"
+TOKEN=$(curl -s -m 20 "$API/auths/signin" -H "$JSON" \
+  -d "$(jq -n --arg e "$WEBUI_ADMIN_EMAIL" --arg p "$WEBUI_ADMIN_PASSWORD" '{email:$e,password:$p}')" | jq -r '.token // empty')
+if [ -z "$TOKEN" ]; then
+  warn "admin 登入失敗（密碼可能已在 UI 改過），略過知識庫同步"
+  exit 0
+fi
+ok "已登入"
+
+echo "1) 清除舊的知識庫與助手模型"
+call POST /models/model/delete -H "$JSON" -d "$(jq -n --arg id "$MODEL_ID" '{id:$id}')" >/dev/null
+page=1
+while [ "$page" -le 10 ]; do
+  R=$(call GET "/knowledge/?page=$page")
+  [ "$(printf '%s' "$R" | jq -r '(.items // .) | length' 2>/dev/null || echo 0)" -ge 1 ] 2>/dev/null || break
+  for id in $(printf '%s' "$R" | jq -r --arg n "$KB_NAME" '(.items // .)[]? | select(.name == $n) | .id' 2>/dev/null); do
+    for fid in $(call GET "/knowledge/$id" | jq -r '.files[]?.id'); do
+      call POST "/knowledge/$id/file/remove?delete_file=true" -H "$JSON" -d "$(jq -n --arg f "$fid" '{file_id:$f}')" >/dev/null
+    done
+    call DELETE "/knowledge/$id/delete" >/dev/null
+    echo "  已刪除舊知識庫 $id"
+  done
+  page=$((page + 1))
+done
+
+echo "2) 建立知識庫「$KB_NAME」並上傳文件"
+KB=$(call POST /knowledge/create -H "$JSON" -d "$(jq -n --arg n "$KB_NAME" --argjson g "$GRANT" \
+  '{name:$n,description:"ES index 語意說明與查詢範例（自然語言 -> DSL）",access_control:null,access_grants:$g}')")
+KB_ID=$(printf '%s' "$KB" | jq -r '.id // empty')
+if [ -z "$KB_ID" ]; then bad "建立知識庫失敗：$(printf '%s' "$KB" | head -c 300)"; echo "有項目失敗"; exit 1; fi
+ok "知識庫 $KB_ID"
+
+N=0
+for f in "$W"/docs/*.md; do
+  name=$(basename "$f")
+  UP=$(call POST /files/ -F "file=@$f;filename=$name")
+  FID=$(printf '%s' "$UP" | jq -r '.id // empty')
+  if [ -z "$FID" ]; then bad "上傳 $name 失敗：$(printf '%s' "$UP" | head -c 300)"; continue; fi
+  ST=pending; i=0
+  while [ "$i" -lt 150 ]; do          # embedding is processed in the background; wait for it (up to 5 minutes)
+    ST=$(call GET "/files/$FID/process/status" | jq -r '.status // "completed"')
+    case "$ST" in completed|failed) break ;; esac
+    sleep 2; i=$((i + 1))
+  done
+  if [ "$ST" != completed ]; then bad "$name 處理狀態：$ST"; continue; fi
+  R=$(call POST "/knowledge/$KB_ID/file/add" -H "$JSON" -d "$(jq -n --arg f "$FID" '{file_id:$f}')")
+  if printf '%s' "$R" | jq -e '.files' >/dev/null 2>&1; then ok "$name"; N=$((N + 1)); else bad "加入知識庫失敗 $name：$(printf '%s' "$R" | head -c 300)"; fi
+done
+
+GOT=$(call GET "/knowledge/$KB_ID")
+COUNT=$(printf '%s' "$GOT" | jq -r '.files | length' 2>/dev/null)
+[ "$COUNT" = "$N" ] && [ "$N" -gt 0 ] && ok "知識庫共 $COUNT 份文件" || bad "知識庫文件數 ${COUNT:-?}，預期 $N"
+printf '%s' "$GOT" | jq -e '(.access_grants // null) | if . == null then true else any(.[]; .principal_id == "*") end' >/dev/null 2>&1 \
+  || warn "知識庫沒有「所有使用者可讀」的授權（可能被 sharing.public_knowledge 權限擋下）；一般使用者要在 Admin 內調整後才查得到"
+
+echo "3) 檢索測試（bge-m3 嵌入）"
+Q=$(call POST /retrieval/query/collection -H "$JSON" \
+  -d "$(jq -n --arg c "$KB_ID" '{collection_names:[$c],query:"過去一小時流量最大的來源 IP",k:3}')")
+if printf '%s' "$Q" | jq -e '(.documents[0] // []) | length > 0' >/dev/null 2>&1; then
+  ok "檢索有回傳片段"
+else
+  bad "檢索沒有結果（檢查 Ollama 的 {{ ollama_embed_model }} 與 RAG_OLLAMA_BASE_URL）：$(printf '%s' "$Q" | head -c 300)"
+fi
+
+echo "4) 建立助手模型「$MODEL_NAME」"
+MB=$(jq -n --arg id "$MODEL_ID" --arg name "$MODEL_NAME" --arg base "$BASE_MODEL" --rawfile sys "$W/system-prompt.txt" \
+  --arg kb "$KB_ID" --arg kbn "$KB_NAME" --argjson g "$GRANT" --argjson t {{ ollama_num_thread | int }} \
+  '{id:$id,name:$name,base_model_id:$base,is_active:true,access_control:null,access_grants:$g,
+    meta:{description:"內建 System Prompt、知識庫與 Elasticsearch 工具的深度查詢助手",
+          knowledge:[{type:"collection",id:$kb,name:$kbn}],toolIds:["server:mcp:es-mcp"]},
+    params:{system:$sys,function_calling:"native",num_thread:$t}}')
+M=$(call POST /models/create -H "$JSON" -d "$MB")
+if printf '%s' "$M" | jq -e '.id' >/dev/null 2>&1; then ok "模型 $MODEL_ID（基底 $BASE_MODEL）"; else bad "建立模型失敗：$(printf '%s' "$M" | head -c 300)"; fi
+
+echo
+if [ "$FAIL" -eq 0 ]; then echo "知識庫同步完成"; else echo "有項目失敗"; fi
+exit "$FAIL"

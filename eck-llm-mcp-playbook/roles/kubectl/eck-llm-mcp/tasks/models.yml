@@ -1,37 +1,29 @@
 ---
-# Model tar (contains models/blobs, models/manifests) -> PV. The tar is only read when any model is missing on the PV.
+# Models are NOT imported by the playbook: extract ollama-models.tar into the PV yourself (see README section 1).
+# This only checks that every model in ollama_models is on the PV and aborts otherwise.
 # The PV is mounted at /root/.ollama in the container, so models live under <ollama_pv_path>/models.
+- name: 主力模型與嵌入模型必須在 ollama_models 清單內
+  assert:
+    that:
+      - ollama_primary_model in ollama_models
+      - ollama_embed_model in ollama_models
+    quiet: true
+    fail_msg: "ollama_models 必須包含 ollama_primary_model（{{ ollama_primary_model }}）與 ollama_embed_model（{{ ollama_embed_model }}）。"
+
 - name: 檢查 PV 上各模型的 manifest
   stat:
     path: "{{ ollama_models_dir }}/manifests/registry.ollama.ai/library/{{ item.split(':')[0] }}/{{ item.split(':')[1] }}"
     get_checksum: false
   register: model_manifests
   loop: "{{ ollama_models }}"
+  loop_control:
+    label: "{{ item }}"
 
-- name: 匯入模型 tar（PV 上缺模型時）
-  when: model_manifests.results | rejectattr('stat.exists') | list | length > 0
-  block:
-    - name: 檢查 {{ ollama_models_src }}
-      stat:
-        path: "{{ ollama_models_src }}"
-        get_checksum: false
-      register: models_src
-
-    - name: 找不到模型 tar 就中止
-      assert:
-        that: models_src.stat.exists
-        quiet: true
-        fail_msg: >-
-          PV 上缺少模型，而且目標主機沒有 {{ ollama_models_src }}。
-          請依 README「離線準備」把 package/pull.sh 產生的 ollama-models.tar 放到該路徑。
-
-    - name: 解開 tar 到 PV
-      command: "tar -xf {{ ollama_models_src }} -C {{ ollama_pv_path }} --no-same-owner"
-
-    - name: 再檢查各模型 manifest
-      stat:
-        path: "{{ ollama_models_dir }}/manifests/registry.ollama.ai/library/{{ item.split(':')[0] }}/{{ item.split(':')[1] }}"
-        get_checksum: false
-      register: model_manifests_after
-      loop: "{{ ollama_models }}"
-      failed_when: not model_manifests_after.stat.exists
+- name: PV 上缺模型就中止
+  assert:
+    that: model_manifests.results | rejectattr('stat.exists') | list | length == 0
+    quiet: true
+    fail_msg: >-
+      {{ ollama_models_dir }} 缺少模型：{{ model_manifests.results | rejectattr('stat.exists') | map(attribute='item') | join('、') }}。
+      請把 package/pull.sh 產生的 ollama-models.tar 解壓到 {{ ollama_pv_path }}（解開後要有 {{ ollama_models_dir }}/blobs 與 manifests），
+      指令：sudo tar -xf ollama-models.tar -C {{ ollama_pv_path }}
