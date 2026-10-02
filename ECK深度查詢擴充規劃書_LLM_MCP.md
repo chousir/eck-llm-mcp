@@ -470,7 +470,7 @@ MCP 的價值是「任何 REST API 都能包成工具」。以下視需求自建
 
 - **Dashboard / Data View**:包裝 Kibana Saved Objects API(建立/修改 data view、dashboard)。
 - **Data topology**:包裝 `_cat/shards`、`_cat/nodes`、`_cluster/health`、`_nodes/stats`。
-- **Geofence 專用工具**:包裝常用 geo_bounding_box/geo_polygon 查詢範本,讓 LLM 只需填座標。
+- **Geofence 專用工具**:包裝常用 geo_bounding_box/geo_shape 查詢範本,讓 LLM 只需填座標。
 
 > 起步先用官方 MCP(查詢/mapping/shard 已涵蓋 80% 需求);dashboard 等寫入型工具再按 §9 各任務逐步加。
 
@@ -586,8 +586,8 @@ LLM 產生的 DSL 可能語法錯或查空。流程加一層:
 
 ### 9.2 Geofence(地理圍欄查詢)
 
-- **實現**:資料需有 `geo_point`(GeoIP 產生的 `geo.location`)。LLM 產生 `geo_bounding_box` 或 `geo_polygon` 查詢(§7.1 範本已含)。
-- **範例**:「找出來源落在台北市範圍(這組座標)內、且流量 > 1MB 的連線」→ LLM 產生 geo_polygon + range 複合查詢。
+- **實現**:資料需有 `geo_point`(GeoIP 產生的 `geo.location`)。LLM 產生 `geo_bounding_box` 或 `geo_shape`(多邊形)查詢(§7.1 範本已含;`geo_polygon` 在 ES 9 已廢棄,不要用)。
+- **範例**:「找出來源落在台北市範圍(這組座標)內、且流量 > 1MB 的連線」→ LLM 產生 geo_shape(Polygon)+ range 複合查詢。
 - **驗證**:圈選範圍內外的測試資料能被正確篩選;與 Kibana Maps 手動繪製多邊形的結果一致。
 
 ### 9.3 Data Topology(叢集/分片拓撲分析)

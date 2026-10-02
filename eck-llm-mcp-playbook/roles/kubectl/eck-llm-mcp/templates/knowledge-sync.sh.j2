@@ -44,8 +44,14 @@ while [ "$page" -le 10 ]; do
   R=$(call GET "/knowledge/?page=$page")
   [ "$(printf '%s' "$R" | jq -r '(.items // .) | length' 2>/dev/null || echo 0)" -ge 1 ] 2>/dev/null || break
   for id in $(printf '%s' "$R" | jq -r --arg n "$KB_NAME" '(.items // .)[]? | select(.name == $n) | .id' 2>/dev/null); do
-    for fid in $(call GET "/knowledge/$id" | jq -r '.files[]?.id'); do
-      call POST "/knowledge/$id/file/remove?delete_file=true" -H "$JSON" -d "$(jq -n --arg f "$fid" '{file_id:$f}')" >/dev/null
+    n=0    # the file list is paginated: take the first page repeatedly until it is empty
+    while [ "$n" -lt 10 ]; do
+      FIDS=$(call GET "/knowledge/$id/files" | jq -r '.items[]?.id')
+      [ -n "$FIDS" ] || break
+      for fid in $FIDS; do
+        call POST "/knowledge/$id/file/remove?delete_file=true" -H "$JSON" -d "$(jq -n --arg f "$fid" '{file_id:$f}')" >/dev/null
+      done
+      n=$((n + 1))
     done
     call DELETE "/knowledge/$id/delete" >/dev/null
     echo "  已刪除舊知識庫 $id"
@@ -78,7 +84,7 @@ for f in "$W"/docs/*.md; do
 done
 
 GOT=$(call GET "/knowledge/$KB_ID")
-COUNT=$(printf '%s' "$GOT" | jq -r '.files | length' 2>/dev/null)
+COUNT=$(call GET "/knowledge/$KB_ID/files" | jq -r '.total // (.items | length)' 2>/dev/null)
 [ "$COUNT" = "$N" ] && [ "$N" -gt 0 ] && ok "知識庫共 $COUNT 份文件" || bad "知識庫文件數 ${COUNT:-?}，預期 $N"
 printf '%s' "$GOT" | jq -e '(.access_grants // null) | if . == null then true else any(.[]; .principal_id == "*") end' >/dev/null 2>&1 \
   || warn "知識庫沒有「所有使用者可讀」的授權（可能被 sharing.public_knowledge 權限擋下）；一般使用者要在 Admin 內調整後才查得到"

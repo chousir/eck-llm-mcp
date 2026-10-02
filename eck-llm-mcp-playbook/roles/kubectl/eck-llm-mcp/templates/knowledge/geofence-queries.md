@@ -7,7 +7,8 @@
 ## 查詢注意事項
 - 座標一律寫成 `{ "lat": 緯度, "lon": 經度 }`，不要把經緯度順序弄反。
 - 圓形範圍用 `geo_distance`（要有 `distance`，例如 `50km`）；矩形範圍用 `geo_bounding_box`（`top_left` + `bottom_right`）；
-  任意多邊形用 `geo_polygon` 或對 `geo_shape` 欄位查詢。
+  任意多邊形用 `geo_shape` 查詢（對 `geo_point` 欄位也適用）。**不要用 `geo_polygon`**：在 Elasticsearch 9 已被標示為廢棄。
+- `geo_shape` 的座標是 GeoJSON 順序 `[經度, 緯度]`（與 `geo_distance` 的 `{lat, lon}` 相反）；多邊形第一個點與最後一個點必須相同（封閉）。
 - 地理條件放在 `bool.filter`（不計分、可快取）。
 - 沒有座標的文件不會被地理條件命中；若結果比預期少，先確認 `geo.location` 是否存在（`exists` 查詢）。
 - 台北市中心座標約 lat 25.033、lon 121.565。
@@ -45,11 +46,10 @@ DSL：
 ```json
 { "query": { "bool": { "filter": [
     { "range": { "@timestamp": { "gte": "now-24h" } } },
-    { "geo_polygon": { "geo.location": { "points": [
-        { "lat": 25.10, "lon": 121.45 },
-        { "lat": 25.10, "lon": 121.65 },
-        { "lat": 24.95, "lon": 121.65 },
-        { "lat": 24.95, "lon": 121.45 } ] } } } ] } },
+    { "geo_shape": { "geo.location": {
+        "shape": { "type": "Polygon", "coordinates": [ [
+            [121.45, 25.10], [121.65, 25.10], [121.65, 24.95], [121.45, 24.95], [121.45, 25.10] ] ] },
+        "relation": "intersects" } } } ] } },
   "size": 20 }
 ```
 
