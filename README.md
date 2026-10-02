@@ -40,6 +40,8 @@ package/pull.sh            # 映像 + 模型 + SHA256SUMS（也可 pull.sh image
 package/push-images.sh                                   # 校驗 SHA256SUMS，load 並以原始名稱 push
 ```
 
+`push-images.sh` 先校驗 `SHA256SUMS`，再 load `data/images/` 底下**所有** `.tar`（檔名不限，映像名稱在 tar 裡面），最後把 `images.list` 的每個映像以原始名稱 push；`images.list` 有映像不在任何 tar 內就中止，不會推任何東西。
+
 **模型自己解壓到 Ollama 的 PV**（playbook 不會匯入模型，只檢查模型都在，缺任何一個就中止）。把 `ollama-models.tar` 帶到 AI 節點後：
 
 ```bash
